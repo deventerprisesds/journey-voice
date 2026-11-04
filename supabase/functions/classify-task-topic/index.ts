@@ -109,7 +109,8 @@ Respond ONLY with valid JSON in this exact format:
     console.error('[CLASSIFY-TOPIC] AI classification failed:', error);
     
     // Fallback: create a topic based on category
-    const fallbackName = taskCategory === 'CAREER' ? 'Career Tasks'
+    const fallbackName = taskCategory === 'JOB' ? 'Job Tasks'
+      : taskCategory === 'CAREER' ? 'Career Tasks'
       : taskCategory === 'PROF_EDUCATION' ? 'Education Tasks'
       : taskCategory === 'VENTURES' ? 'Venture Projects'
       : taskCategory === 'LIFE' || taskCategory === 'PERSONAL' ? 'Personal Tasks'

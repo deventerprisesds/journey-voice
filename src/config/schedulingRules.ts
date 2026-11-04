@@ -153,8 +153,15 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
     lateBufferHours: 1,
   },
   categoryMappings: {
-    CAREER: {
+    // JOB = the employer's work; CAREER = getting the next role (owner 2026-11-03). Seeds only -- both rows
+    // are changeable in Settings. JOB's lane is BACKLOG because task_status has no JOB value.
+    JOB: {
       defaultTimeWindow: ['business_hours'],
+      defaultStatus: 'BACKLOG',
+      estimatedDuration: 120,
+    },
+    CAREER: {
+      defaultTimeWindow: ['after_work', 'weekends'],
       defaultStatus: 'CAREER',
       estimatedDuration: 120,
     },
@@ -197,12 +204,12 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
       breakfast: ['morning', 'LIFE'],
       
       // Business hours keywords
-      meeting: ['business_hours', 'CAREER'],
-      work: ['business_hours', 'CAREER'],
-      office: ['business_hours', 'CAREER'],
-      call: ['business_hours', 'CAREER'],
+      meeting: ['business_hours', 'JOB'],
+      work: ['business_hours', 'JOB'],
+      office: ['business_hours', 'JOB'],
+      call: ['business_hours', 'JOB'],
       interview: ['business_hours', 'CAREER'],
-      review: ['business_hours', 'CAREER'],
+      review: ['business_hours', 'JOB'],
       
       // Education keywords
       study: ['business_hours', 'PROF_EDUCATION'],
@@ -244,19 +251,19 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
       
       // Financial impact keywords
       payment: ['business_hours', 'LIFE'],
-      invoice: ['business_hours', 'CAREER'],
+      invoice: ['business_hours', 'JOB'],
       bill: ['business_hours', 'LIFE'],
       tax: ['business_hours', 'LIFE'],
-      budget: ['business_hours', 'CAREER'],
-      contract: ['business_hours', 'CAREER'],
+      budget: ['business_hours', 'JOB'],
+      contract: ['business_hours', 'JOB'],
       
       // Communications / people keywords
-      email: ['business_hours', 'CAREER'],
-      follow_up: ['business_hours', 'CAREER'],
-      respond: ['business_hours', 'CAREER'],
-      reply: ['business_hours', 'CAREER'],
+      email: ['business_hours', 'JOB'],
+      follow_up: ['business_hours', 'JOB'],
+      respond: ['business_hours', 'JOB'],
+      reply: ['business_hours', 'JOB'],
       text: ['business_hours', 'LIFE'],
-      message: ['business_hours', 'CAREER'],
+      message: ['business_hours', 'JOB'],
     },
     priorityMappings: {
       urgent: 4,
@@ -270,7 +277,7 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
 1. Consider typical timing for the activity type (meals, meetings, errands, workouts, etc.)
 2. Find the NEXT AVAILABLE slot that matches natural timing patterns
 3. Avoid all user's busy times
-4. Respect category defaults (CAREER during business_hours, EDUCATION/VENTURES after_work, LIFE flexible)
+4. Respect the category windows in this config (JOB during business_hours by default, CAREER/EDUCATION/VENTURES after_work and weekends, LIFE flexible)
 5. If a suggested time is in the past or conflicted, propose the next logical occurrence
 6. ALWAYS prioritize: (a) tasks with due dates within 48 hours, (b) tasks involving people or communications (meetings, calls, emails, follow-ups), and (c) tasks with financial impact (payments, invoices, contracts). Schedule these earlier in the day and give them preference over same-priority tasks.
 

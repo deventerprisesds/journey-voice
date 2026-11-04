@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
 import { activityBusySlots, resolveActivities, normalizeActivity, matchActivity, planPush, toMinutes, minutesToHHMM, parseClockTime, type PushItem } from "../_shared/activities.ts";
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
+import { normalizeCategory } from "../_shared/categories.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, activeCaveats } from "../_shared/scheduling-defaults.ts";
 import { runDedup, finalizeDedup, undoDedupSkips, type DedupLogEntry } from "../_shared/task-dedup.ts";
@@ -908,7 +909,7 @@ async function createTask(supabase: any, userId: string, args: any): Promise<Exe
       title: args.title,
       description: args.description || null,
       priority: args.priority?.toUpperCase() || 'MEDIUM',
-      category: args.category?.toUpperCase() || 'LIFE',
+      category: normalizeCategory(args.category),
       status: 'BACKLOG',
       board_id: board.id,
       user_id: userId
@@ -986,7 +987,7 @@ async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse
     if (args.description !== undefined) updateData.description = args.description;
     if (args.status) updateData.status = args.status.toUpperCase();
     if (args.priority) updateData.priority = args.priority.toUpperCase();
-    if (args.category) updateData.category = args.category.toUpperCase();
+    if (args.category) updateData.category = normalizeCategory(args.category);
     // Huddle scrum-master grooming: assign the task to a specific agent + apply labels.
     // assigned_agent is a Huddle agent id (e.g. "finn-reid"); pass null/"" to clear.
     if (args.assigned_agent !== undefined) {
@@ -1052,7 +1053,7 @@ async function batchUpdateTasks(supabase: any, userId: string, args: any): Promi
     if (u.description !== undefined) data.description = u.description;
     if (u.status) data.status = String(u.status).toUpperCase();
     if (u.priority) data.priority = String(u.priority).toUpperCase();
-    if (u.category) data.category = String(u.category).toUpperCase();
+    if (u.category) data.category = normalizeCategory(u.category);
     if (u.assigned_agent !== undefined) data.assigned_agent = u.assigned_agent ? String(u.assigned_agent) : null;
     if (u.tags !== undefined) data.tags = Array.isArray(u.tags) ? u.tags.map((t: unknown) => String(t)) : [];
     if (u.definition_of_done !== undefined) data.definition_of_done = u.definition_of_done ? String(u.definition_of_done) : null;
@@ -1850,7 +1851,7 @@ async function parseAndCreateTasks(
         title: task.title,
         description: task.description || null,
         priority: (task.priority || 'MEDIUM').toUpperCase(),
-        category: (task.category || 'LIFE').toUpperCase(),
+        category: normalizeCategory(task.category),
         status: task.status || args.default_status || ((normalizedStartTime || normalizedDueDate) ? 'UP_NEXT' : 'BACKLOG'),
         is_priority: isPriority,
         due_date: normalizedDueDate,

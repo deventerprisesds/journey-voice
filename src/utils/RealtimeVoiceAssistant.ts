@@ -4,6 +4,7 @@ import { VOICE_CONFIG } from '@/config/voiceConfig';
 // stops inventing its own -- see src/utils/workflowStatus.ts for why a type check cannot
 // enforce it (task_status contains LIFE/CAREER/PROF_EDUCATION/VENTURES too).
 import { defaultStatusForNewTask } from '@/utils/workflowStatus';
+import { normalizeCategory as normalizeSharedCategory, type TaskCategory } from '../../supabase/functions/_shared/categories.ts';
 
 // Global instance tracking for debugging visibility
 let globalInstanceCounter = 0;
@@ -1495,30 +1496,10 @@ export class RealtimeVoiceAssistant {
     return 'MEDIUM';
   }
 
-  // Helper: Normalize category to database enum
-  private normalizeCategory(category?: string): 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION' {
-    if (!category) return 'LIFE';
-    const c = category.toLowerCase().replace(/[_\s-]+/g, '');
-    
-    // Education-related terms
-    if (c.includes('education') || c.includes('professional') || 
-        c.includes('mit') || c.includes('emba') || c.includes('degree') || 
-        c.includes('college') || c.includes('school') || c.includes('class') || 
-        c.includes('coursework') || c.includes('learning') || c.includes('study')) {
-      return 'EDUCATION';
-    }
-    
-    // Career-related terms
-    if (c.includes('career') || c.includes('work') || c.includes('job')) {
-      return 'CAREER';
-    }
-    
-    // Ventures-related terms
-    if (c.includes('venture') || c.includes('startup') || c.includes('business')) {
-      return 'VENTURES';
-    }
-    
-    return 'LIFE';
+  // Helper: Normalize category to database enum. The rule is shared with the edge functions: an exact
+  // category name (JOB, PROF_EDUCATION, ...) maps to itself first -- "JOB" used to become CAREER here.
+  private normalizeCategory(category?: string): TaskCategory {
+    return normalizeSharedCategory(category);
   }
 
   private async createTask(args: any) {
@@ -1656,7 +1637,7 @@ export class RealtimeVoiceAssistant {
         title: string;
         description: string | null;
         priority: 'HIGH' | 'LOW' | 'MEDIUM' | 'URGENT';
-        category: 'CAREER' | 'EDUCATION' | 'LIFE' | 'VENTURES';
+        category: TaskCategory;
         status: 'BLOCKED' | 'LIFE' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'DONE' | 'BACKLOG' | 'TODO';
         board_id: string;
         user_id: string;

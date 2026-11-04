@@ -3,6 +3,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { validateTaskWindow } from "../_shared/scheduling-defaults.ts";
 import { activityBusySlots } from "../_shared/activities.ts";
+import type { TaskCategory } from '../_shared/categories.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -98,7 +99,7 @@ interface Task {
   description?: string;
   status: string;
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
+  category: TaskCategory;
   due_date?: string;
   start_time?: string;
   end_time?: string;
@@ -259,7 +260,8 @@ serve(async (req) => {
       },
       workloadBalance: { projectToTaskRatio: 0.6, oneOffTaskRatio: 0.3, bufferRatio: 0.1 },
       categoryMappings: {
-        CAREER: { defaultTimeWindow: 'business_hours', defaultStatus: 'CAREER', estimatedDuration: 120 },
+        JOB: { defaultTimeWindow: 'business_hours', defaultStatus: 'BACKLOG', estimatedDuration: 120 },
+        CAREER: { defaultTimeWindow: 'after_work', defaultStatus: 'CAREER', estimatedDuration: 120 },
         PROF_EDUCATION: { defaultTimeWindow: 'after_work', defaultStatus: 'PROF_EDUCATION', estimatedDuration: 90 },
         EDUCATION: { defaultTimeWindow: 'after_work', defaultStatus: 'PROF_EDUCATION', estimatedDuration: 90 },
         VENTURES: { defaultTimeWindow: 'after_work', defaultStatus: 'VENTURES', estimatedDuration: 120 },
@@ -320,6 +322,7 @@ serve(async (req) => {
       // Deep merge category mappings
       categoryMappings: loadedUserConfig?.categoryMappings
         ? {
+            JOB: normalizeCategory(loadedUserConfig.categoryMappings.JOB, DEFAULT_CONFIG.categoryMappings.JOB),
             CAREER: normalizeCategory(loadedUserConfig.categoryMappings.CAREER, DEFAULT_CONFIG.categoryMappings.CAREER),
             PROF_EDUCATION: normalizeCategory(loadedUserConfig.categoryMappings.PROF_EDUCATION, DEFAULT_CONFIG.categoryMappings.PROF_EDUCATION),
             EDUCATION: normalizeCategory(loadedUserConfig.categoryMappings.EDUCATION, DEFAULT_CONFIG.categoryMappings.EDUCATION),
@@ -387,7 +390,7 @@ serve(async (req) => {
 1. Consider typical timing for the activity type (meals, meetings, errands, workouts, etc.)
 2. Find the NEXT AVAILABLE slot that matches natural timing patterns
 3. Avoid all user's busy times
-4. Respect category defaults (CAREER during business_hours, EDUCATION/VENTURES after_work, LIFE flexible)
+4. Respect the category windows in the user's config (JOB during business_hours by default, CAREER/EDUCATION/VENTURES after_work, LIFE flexible)
 5. If a suggested time is in the past or conflicted, propose the next logical occurrence
 
 Return your suggestion with reasoning that explains why this time makes sense for this specific activity.`;
@@ -450,7 +453,7 @@ INSTRUCTIONS:
 2. Find the NEXT AVAILABLE slot that matches the pattern
 3. Avoid all listed busy times
 4. If suggested time is past/busy, propose next occurrence
-5. Respect category defaults (e.g., CAREER during business hours)
+5. Respect the category windows in the user's config (e.g., JOB during business hours)
 
 Return ONLY valid JSON (no markdown):
 {

@@ -17,6 +17,7 @@ import {
 import { getTodayInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
 import { runWorkSessionPass } from "../_shared/work-session-pass.ts";
 import { activityBusySlots } from "../_shared/activities.ts";
+import { matchKeywordRule } from "../_shared/keyword-rules.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -214,27 +215,13 @@ function computeUsedMinutes(
 function getKeywordWindowOverride(
   title: string,
   contextKeywords: Record<string, string[]> | undefined,
-  activeWindowNames: string[]
+  activeWindowNames: string[],
+  category?: string,
 ): { window: string; matchedKeyword: string } | null {
-  if (!contextKeywords || !title) return null;
-  const lower = title.toLowerCase();
-
-  for (const [keyword, mapping] of Object.entries(contextKeywords)) {
-    // mapping is [timeWindow, status] per schedulingRules.ts
-    if (!Array.isArray(mapping) || mapping.length === 0) continue;
-    const targetWindow = mapping[0];
-    if (!targetWindow || targetWindow === 'flexible') continue;
-
-    // Match by word boundary (and underscore→space variant for keys like "follow_up")
-    const kw = keyword.toLowerCase().replace(/_/g, ' ');
-    if (kw.length < 3) continue;
-    if (lower.includes(kw)) {
-      if (activeWindowNames.includes(targetWindow)) {
-        return { window: targetWindow, matchedKeyword: keyword };
-      }
-    }
-  }
-  return null;
+  // The rule lives in _shared/keyword-rules.ts so the daily review's QC check applies the SAME one.
+  // A keyword whose lane is a category now steers only tasks in that category (owner 2026-11-03).
+  const m = matchKeywordRule(title, contextKeywords, { category, activeWindowNames });
+  return m ? { window: m.window, matchedKeyword: m.keyword } : null;
 }
 
 serve(async (req) => {
@@ -1228,7 +1215,7 @@ serve(async (req) => {
             }
 
             // KEYWORD OVERRIDE: contextRules.keywords beats category default.
-            const keywordOverride = getKeywordWindowOverride(task.title, contextKeywords, activeWindowNames);
+            const keywordOverride = getKeywordWindowOverride(task.title, contextKeywords, activeWindowNames, task.category);
             let preferredWindows: string[];
             if (keywordOverride) {
               // Keyword window FIRST, then the category's own windows (see withKeywordWindow).

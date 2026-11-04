@@ -98,7 +98,10 @@ export const DEFAULT_TIME_WINDOWS: Record<string, TimeWindow> = {
 };
 
 export const DEFAULT_CATEGORY_MAPPINGS: Record<string, CategoryMapping> = {
-  CAREER:         { defaultTimeWindow: ['business_hours'],            estimatedDuration: 120, defaultStatus: 'CAREER' },
+  // JOB = the owner's employer's work; CAREER = getting the next role (owner 2026-11-03). Seeds only --
+  // both rows are changeable in Settings. JOB's lane is BACKLOG because task_status has no JOB value.
+  JOB:            { defaultTimeWindow: ['business_hours'],            estimatedDuration: 120, defaultStatus: 'BACKLOG' },
+  CAREER:         { defaultTimeWindow: ['after_work', 'weekends'],    estimatedDuration: 120, defaultStatus: 'CAREER' },
   // maxPerDayWeekend 6: owner 2026-10-28 (weekday 2, weekend 6). Seed only — changeable in Settings.
   PROF_EDUCATION: { defaultTimeWindow: ['after_work', 'weekends'],    estimatedDuration: 90,  defaultStatus: 'PROF_EDUCATION', maxPerDay: 2, maxPerDayWeekend: 6 },
   EDUCATION:      { defaultTimeWindow: ['flexible'],                  estimatedDuration: 90,  defaultStatus: 'EDUCATION' },
@@ -201,9 +204,14 @@ export function resolveConfig(userConfig: any): {
     ? userConfig.timeWindows
     : DEFAULT_TIME_WINDOWS;
 
-  const categoryMappings = (userConfig?.categoryMappings && Object.keys(userConfig.categoryMappings).length > 0)
+  // Saved rows win; a category with NO saved row falls back to its default row. This matches what the
+  // Settings screen shows (mergeSchedulingConfig spreads defaults under the saved rows). Before, a saved map
+  // replaced the defaults wholesale, so a category added later (JOB) appeared in Settings but the scheduler
+  // treated it as unmapped and placed it "anywhere today".
+  const saved = (userConfig?.categoryMappings && typeof userConfig.categoryMappings === 'object')
     ? userConfig.categoryMappings
-    : DEFAULT_CATEGORY_MAPPINGS;
+    : {};
+  const categoryMappings = { ...DEFAULT_CATEGORY_MAPPINGS, ...saved };
 
   return { timeWindows, categoryMappings };
 }

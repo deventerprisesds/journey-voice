@@ -12,6 +12,7 @@ import { scoreSchedulingCandidate } from '@/lib/schedulingCandidates';
 import { getTimePartsInTimezone } from '@/lib/date';
 import { Task, ExternalCalendarEvent } from '@/types/task';
 import { logActivity } from '@/utils/activityLogger';
+import { matchKeywordRule } from '../../supabase/functions/_shared/keyword-rules.ts';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -500,7 +501,6 @@ export function buildDailyReviewReasoning(
       if (keywords && todayTasks.length > 0) {
         for (const task of todayTasks) {
           if (!task.start_time || !task.title) continue;
-          const lower = task.title.toLowerCase();
           const { hour } = getTimePartsInTimezone(task.start_time, tz);
           let scheduledWindow: string;
           if (hour >= 6 && hour < 9) scheduledWindow = 'morning';
@@ -509,23 +509,21 @@ export function buildDailyReviewReasoning(
           else if (hour >= 19 && hour < 23) scheduledWindow = 'evening';
           else scheduledWindow = 'off_hours';
 
-          for (const [keyword, mapping] of Object.entries(keywords)) {
-            if (!Array.isArray(mapping) || mapping.length === 0) continue;
-            const expected = mapping[0];
-            if (!expected || expected === 'flexible') continue;
-            const kw = keyword.toLowerCase().replace(/_/g, ' ');
-            if (kw.length < 3) continue;
-            if (lower.includes(kw) && expected !== scheduledWindow) {
-              violations.push({
-                taskId: task.id,
-                title: task.title,
-                scheduledWindow,
-                expectedWindow: expected,
-                matchedKeyword: keyword,
-                severity: scheduledWindow === 'off_hours' ? 'error' : 'warning',
-              });
-              break; // one violation per task is enough
-            }
+          // Same rule, same keyword as the nightly scheduler picked (shared matcher): the first keyword that
+          // applies to this task's category and whose window is open that day.
+          const match = matchKeywordRule(task.title, keywords, {
+            category: task.category,
+            activeWindowNames: activeWindowNamesOn(task.start_time, tz, config.timeWindows),
+          });
+          if (match && match.window !== scheduledWindow) {
+            violations.push({
+              taskId: task.id,
+              title: task.title,
+              scheduledWindow,
+              expectedWindow: match.window,
+              matchedKeyword: match.keyword,
+              severity: scheduledWindow === 'off_hours' ? 'error' : 'warning',
+            });
           }
         }
       }
@@ -701,4 +699,19 @@ export function buildDailyReviewReasoning(
   });
 
   return reasoning;
+}
+
+/** Named windows (not 'flexible') open on the weekday of `iso` in `tz` -- the set the scheduler used that day. */
+function activeWindowNamesOn(
+  iso: string,
+  tz: string,
+  timeWindows: Record<string, { days?: number[] }> | undefined,
+): string[] | undefined {
+  if (!timeWindows) return undefined;
+  const wd = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(new Date(iso));
+  const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(wd);
+  if (day < 0) return undefined;
+  return Object.entries(timeWindows)
+    .filter(([name, w]) => name !== 'flexible' && Array.isArray(w?.days) && w.days.includes(day))
+    .map(([name]) => name);
 }

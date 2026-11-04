@@ -13,7 +13,8 @@ export const WINDOW_RANGES: Record<string, { start: number; end: number }> = {
 };
 
 export const CATEGORY_WINDOW_MAPPING: Record<string, string[]> = {
-  'CAREER': ['business_hours'],
+  'JOB': ['business_hours'],
+  'CAREER': ['after_work', 'evening', 'weekends'],
   'PROF_EDUCATION': ['after_work', 'evening', 'weekends'],
   'EDUCATION': ['business_hours', 'after_work'],
   'VENTURES': ['after_work', 'evening', 'weekends'],
