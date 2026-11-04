@@ -102,3 +102,59 @@ Extracted the `contextRules.keywords` block from `schedulingRules.ts` at 3995235
 Changed rows are exactly budget, call, contract, email, follow_up, invoice, meeting, message, office, reply,
 respond, review, work (all `business_hours`, lane CAREER -> JOB; windows unchanged). `interview: ['business_hours', 'CAREER']`.
 
+## Claim 5 -- parser prompt: category guide, employer from profiles.company, name hints, one read each, output normalised: CONFIRMED (two notes)
+
+- `ai-task-parser/index.ts:103-117`: ONE `Promise.all` of `profiles.select('company').eq('user_id', userId)` and
+  `user_scheduling_prefs.select('config').eq('user_id', userId)`, before the per-task loop, inside try/catch.
+  The only other config read in the file (`:410`, bulk mode) is a pre-existing read of `user_scheduling_config`.
+- Column check (read-only SELECT): `profiles where id=<owner>` = 0 rows, `profiles where user_id=<owner>` = 1 row,
+  company NULL. So `.eq('user_id', ...)` is the RIGHT key (the AC's Q-3 query used `id`, which matches nothing).
+- Template literal validity: copied the file to `.mts` and ran `node --experimental-strip-types --check` -> no
+  SyntaxError. Interpolations used: `${CATEGORY_KEYS.join(', ')}`, `${categoryGuide}`, `${CATEGORY_KEYS.join('|')}`,
+  all in scope (imports at `:4-5`, `categoryGuide` defined at `:117` before `systemPrompt` at `:157`).
+- Output normalised at `:380-385` with a log line when the raw value differs.
+- `buildCategoryGuide` probe: employer `null`, `""`, `"  "`, `undefined`, `5` -> no `undefined`/`null` text,
+  "The owner's employer is not named. Work for an employer is still JOB."; `"Trinnex"` -> named line.
+  `grep -rln Trinnex supabase/functions src` (excluding tests) -> no hits (AC-D1 holds).
+- Note N-1: supabase-js returns `{ error }` rather than throwing, so a failed profiles/prefs SELECT is silently
+  treated as "no employer" with no log line (AC-G3 asks for a log). The parse still proceeds.
+- Note N-2: the owner's LIVE map has one existing row that already fits the name-hint shape:
+  `appointment = ["flexible","LIFE"]`. Probe: `categoryHintsFromKeywords(live) = [{"name":"appointment","category":"LIFE"}]`,
+  so from deploy the prompt tells the model "a task naming appointment usually belongs to LIFE" (e.g. "Book
+  appointment with my manager"). Not a new row; an existing row's meaning changed. Venture names (Huddle, Nexus, ...)
+  reach the prompt only once rows are added (see claim 10).
+
+## Claim 6 -- execute-tool create/update/batch/parse normalise; quick_create_task left as is: CONFIRMED (one defect)
+
+Diff read: `:912` create, `:990` update, `:1056` batch, `:1854` parse_and_create insert all use `normalizeCategory`.
+`quickCreateTask` (`:3260-3270`) still forwards only title/date/auto_schedule, so its `category` argument
+(whose enum now advertises JOB) is still dropped -- AC-D6 stays unmet, as disclosed.
+
+**D-4 (silent re-categorisation on UPDATE).** Before, an unknown category on `update_task` / `batch_update_tasks`
+reached the UPDATE and failed on the enum, leaving the row as it was. Now `normalizeCategory` turns any
+unrecognised string into `LIFE`, and no log line names the raw value (AC-D5 requires one). Probe values:
+`Employment -> LIFE`, `Office -> LIFE`, `FAMILY -> LIFE` (Huddle has a FAMILY bucket), `Professional work -> EDUCATION`,
+`networking -> JOB`. A JOB task updated by an agent with `category:"Employment"` is silently re-filed to LIFE and
+the response reports success. Create is lower risk (a default is needed there); UPDATE should keep the old value
+(or refuse) when the input does not map, rather than writing LIFE.
+
+## Claim 7 -- tool-definitions enums from CATEGORY_KEYS: CONFIRMED
+
+Diff read: get_tasks filter (`:50`), update_task (`:90`), caveat `categories` prose (`:155`), quick_create_task
+(`:372`) all use `[...CATEGORY_KEYS]` / `CATEGORY_KEYS.join`. update_task gains PROF_EDUCATION, PERSONAL, JOB.
+
+## Claim 8 -- migration adds JOB; types.ts lists JOB: CONFIRMED (code); NOT APPLIED live
+
+- `supabase/migrations/20261104120000_task_category_job.sql` is one statement:
+  `ALTER TYPE public.task_category ADD VALUE IF NOT EXISTS 'JOB';` Nothing else uses the value (AC-A2).
+- `types.ts`: JOB added to the union (`:4448`) and the `Constants` array (`:4617`); `categories.test.ts` C-2
+  asserts the union equals CATEGORY_KEYS.
+- LIVE (read-only): `enum_range(null::task_category)` = `{LIFE,CAREER,VENTURES,EDUCATION,PROF_EDUCATION,PERSONAL}`;
+  `schema_migrations` has no `20261104120000`. Expected (not yet run), but see D-5.
+
+**D-5 (rollout order, AC-G1 not implemented).** Edge functions auto-deploy on push to `main`
+(`deploy-supabase-functions.yml`, `paths: supabase/functions/**`). If the branch merges before the migration is
+applied, the parser prompt now OFFERS JOB and `normalizeCategory('JOB')` keeps it, so every work-task insert fails
+with `invalid input value for enum task_category` until the migration runs. No fallback exists in code. The
+migration must be applied (MCP `apply_migration`) BEFORE the merge to main.
+
