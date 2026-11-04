@@ -47,7 +47,7 @@ describe('normalizeCategory (section 3b)', () => {
     ['N-14', 'PERSONAL', 'PERSONAL'],
   ];
   for (const [id, input, want] of rows) {
-    it(`${id} ${JSON.stringify(input)} -> ${want}`, () => assert.equal(normalizeCategory(input), want));
+    it(`${id} normalise`, () => assert.equal(normalizeCategory(input), want, JSON.stringify(input)));
   }
 });
 
