@@ -96,10 +96,17 @@ export interface SchedulingConfig {
    * Contract: supabase/functions/_shared/activities.ts.
    */
   activities?: Activity[];
+  /**
+   * How strongly a category wins a contested slot (added to the scheduler's score). Owner 2026-11-04:
+   * education outranks Ventures. Backend contract: _shared/scheduling-defaults.ts resolveCategoryWeights.
+   */
+  categoryWeights?: Record<string, number>;
 }
 
 // Default configuration blending all existing rules
 export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
+  // Seeds only: education wins a slot over other work by default (owner 2026-11-04).
+  categoryWeights: { PROF_EDUCATION: 20, EDUCATION: 20 },
   timezone: 'America/New_York', // Will be auto-detected on first use
   timeWindows: {
     morning: {
@@ -350,6 +357,8 @@ export function mergeSchedulingConfig(
     caveats: Array.isArray(userConfig.caveats) ? userConfig.caveats : [],
     // Carried for the same reason as caveats: a key this function forgets is dropped on the next save.
     assignmentSessions: { ...DEFAULT_SCHEDULING_CONFIG.assignmentSessions!, ...(userConfig.assignmentSessions ?? {}) },
+    // Same pass-through rule: defaults under saved, so a seed applies until the owner changes it.
+    categoryWeights: { ...DEFAULT_SCHEDULING_CONFIG.categoryWeights!, ...(userConfig.categoryWeights ?? {}) },
     // Same pass-through rule — but UNDEFINED when never saved, so the seed keeps applying and a save
     // of an unrelated setting never writes an empty list that would erase lunch.
     activities: Array.isArray(userConfig.activities) ? userConfig.activities : undefined,
