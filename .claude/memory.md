@@ -12,6 +12,27 @@ Last updated: 2026-10-27
 > distrust, never the sections. `actions.md` has no file-level stamp at all, deliberately, for
 > the same reason: its ACT entries each carry their own date.
 
+## Active work — JOB category, Phase 1 (2026-11-04, branch claude/jolly-archimedes-is9jyz, deventerprisesds/journey-voice#80, NOT merged)
+Owner accepted a role at Trinnex. **JOB** = employer work (business hours by default); **CAREER** = next role
+(after work + weekends); client work and own apps = **VENTURES**; SDLC / ops decks / ops diagrams / Esri / Power BI =
+JOB. No employment start date (owner: "a moot point, stop applying that logic").
+- **One category list**: `supabase/functions/_shared/categories.ts` (JOB directly before CAREER). LIFE's label is
+  **Life** — the #35 swap to "Personal" was reverted by #40 (7401f71); the "LIFE vs PERSONAL" section below
+  describes the pre-revert state.
+- **Keyword lanes gate keyword windows**: `_shared/keyword-rules.ts`, used by the nightly scheduler AND the daily
+  QC. A lane that is not a category (e.g. `flexible`) applies to all. PERSONAL counts as LIFE, EDUCATION as
+  PROF_EDUCATION for this rule only. `schedulingService.extractSchedulingContext` (uncategorised tasks) left as is.
+- **Name hints** = keyword rows with window Flexible + a category lane: the category AI reads them, the scheduler
+  skips them. Employer name comes from `profiles.company`.
+- **resolveConfig now fills missing categories from defaults** (saved rows still win) — without this JOB showed in
+  Settings but the scheduler placed it anywhere.
+- **Scorecard** must run off-box (`eval-job-category.yml`): this session's proxy refuses the project host (CONNECT
+  403), and `npm ci` cannot run here (149 lockfile entries resolve to europe-west1-npm.pkg.dev, refused) — use
+  `npm install --package-lock=false --ignore-scripts` for local typechecks, never commit the lock change.
+- Huddle side: deventerpriseds-org/huddle-extension-app#130 (hue 200, "Job" before Career, cole-blake owns JOB).
+- Phone widget list gains JOB in `public/bridge.config.json` (f5f17f9) — only reaches the phone on the next APK build.
+- Status: implemented + tests green; screens helper and independent verifier still running; nothing live.
+
 ## Activities — reserved time that is NOT a task (2026-10-29, MERGED #76 `ab9834b`, edge fns DEPLOYED; owner not yet confirmed live)
 
 - **undef-check trap:** its import regex `import\s+([^;]*?)\s+from` stops at the FIRST "from", so an
@@ -749,3 +770,11 @@ order is seeder-first, delete-second.
 - **The Supabase CLI is installed at `latest`; a 2026-11 release made `secrets set` and `functions deploy` refuse to run without a TTY unless `--yes`.** Every CLI call in CI must pass `--yes` — including the one inside `scripts/deploy-all-functions.sh`, which mode=all uses instead of the workflow's own lines (missed once: #81 fixed the workflow, #82 the script).
 - **A workflow-only change to `deploy-supabase-functions.yml` does not trigger a deploy** (`paths: supabase/functions/**`); dispatch with `function_name: all` from `main` afterwards.
 - **An open PR can silently go `dirty` and strand approved work for days.** #78 (work sessions) sat conflicted 10-29 → 11-03 while the owner believed it shipped. Read `mergeable_state` of any open PR carrying approved work before reporting status.
+
+## Hardening 2026-11-03 — keyword rules ignored their own lane field
+`contextRules.keywords` is `{keyword: [timeWindow, lane]}` and Settings edits both, but
+`nightly-schedule-builder` (`getKeywordWindowOverride`) and `dailyReviewPipeline` QC read ONLY `mapping[0]`, by
+plain substring, and put that window FIRST for every category. So "Work on Nexus application" (VENTURES) is pulled to
+business_hours by the "work" keyword, and because jsonb stores keys shortest-first, "work" is tested before
+"workout"/"homework". Owner's direction: EXTEND (lane gates the window), never remove keywords. Also: do not
+reintroduce an employment start date into the JOB design — owner ruled it moot.

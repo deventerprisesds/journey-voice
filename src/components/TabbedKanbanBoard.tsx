@@ -16,7 +16,7 @@ interface TabbedKanbanBoardProps {
   onTaskEdit?: (task: Task) => void;
 }
 
-type CategoryTab = 'time_filtered' | 'career' | 'prof_education' | 'ventures' | 'life';
+type CategoryTab = 'time_filtered' | 'job' | 'career' | 'prof_education' | 'ventures' | 'life';
 type TimePeriod = 'today' | 'this_week' | 'next_week' | 'all';
 
 // Map old category-as-status to proper status/category
@@ -54,7 +54,7 @@ const TabbedKanbanBoard: React.FC<TabbedKanbanBoardProps> = ({
   const periodParam = searchParams.get('period') as TimePeriod | null;
   
   const [activeTab, setActiveTab] = useState<CategoryTab>(
-    tabParam && ['time_filtered', 'career', 'prof_education', 'ventures', 'life'].includes(tabParam) 
+    tabParam && ['time_filtered', 'job', 'career', 'prof_education', 'ventures', 'life'].includes(tabParam) 
       ? tabParam 
       : 'time_filtered'
   );
@@ -93,7 +93,7 @@ const TabbedKanbanBoard: React.FC<TabbedKanbanBoardProps> = ({
 
   // Sync with URL on mount
   useEffect(() => {
-    if (tabParam && ['time_filtered', 'career', 'prof_education', 'ventures', 'life'].includes(tabParam)) {
+    if (tabParam && ['time_filtered', 'job', 'career', 'prof_education', 'ventures', 'life'].includes(tabParam)) {
       setActiveTab(tabParam);
     }
     if (periodParam && ['today', 'this_week', 'next_week', 'all'].includes(periodParam)) {
@@ -152,6 +152,7 @@ const TabbedKanbanBoard: React.FC<TabbedKanbanBoardProps> = ({
     // Category tabs: filter by category
     const categoryMap: Record<CategoryTab, Task['category'][]> = {
       time_filtered: [], // Handled above
+      job: ['JOB'],
       career: ['CAREER'],
       prof_education: ['PROF_EDUCATION', 'EDUCATION'],
       ventures: ['VENTURES'],
@@ -165,6 +166,7 @@ const TabbedKanbanBoard: React.FC<TabbedKanbanBoardProps> = ({
   };
 
   const categoryTabs = [
+    { value: 'job', label: 'Job', count: getFilteredTasks('job').length },
     { value: 'career', label: 'Career', count: getFilteredTasks('career').length },
     { value: 'prof_education', label: 'Prof. Education', count: getFilteredTasks('prof_education').length },
     { value: 'ventures', label: 'Ventures', count: getFilteredTasks('ventures').length },

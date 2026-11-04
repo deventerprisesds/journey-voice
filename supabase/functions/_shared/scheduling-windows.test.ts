@@ -47,3 +47,32 @@ describe('withKeywordWindow', () => {
     assert.deepEqual(withKeywordWindow('evening', ['evening']), ['evening']);
   });
 });
+
+// ── JOB category (owner 2026-11-03) ───────────────────────────────────────────────────────────────────────
+// A saved category map used to REPLACE the defaults wholesale, so a category added later (JOB) appeared in
+// Settings but the scheduler treated it as unmapped and placed it anywhere. Saved rows still win.
+import { resolveConfig } from './scheduling-defaults.ts';
+
+describe('resolveConfig fills categories the saved map does not have', () => {
+  const savedWithoutJob = {
+    categoryMappings: {
+      CAREER: { defaultTimeWindow: ['business_hours', 'weekends'], defaultStatus: 'CAREER', estimatedDuration: 120 },
+      VENTURES: { defaultTimeWindow: ['evening', 'weekends'], defaultStatus: 'VENTURES', estimatedDuration: 120 },
+    },
+  };
+  it('J1 JOB falls back to its default row (business hours only)', () => {
+    const { categoryMappings } = resolveConfig(savedWithoutJob);
+    assert.deepEqual(getPreferredWindows('JOB', categoryMappings, WEEKDAY), ['business_hours']);
+    assert.deepEqual(getPreferredWindows('JOB', categoryMappings, WEEKEND), []);
+  });
+  it('J2 a saved row is never overwritten by a default', () => {
+    const { categoryMappings } = resolveConfig(savedWithoutJob);
+    assert.deepEqual(categoryMappings.CAREER.defaultTimeWindow, ['business_hours', 'weekends']);
+    assert.deepEqual(categoryMappings.VENTURES.defaultTimeWindow, ['evening', 'weekends']);
+  });
+  it('J3 with nothing saved, the defaults apply (CAREER is now after work + weekends)', () => {
+    const { categoryMappings } = resolveConfig(null);
+    assert.deepEqual(categoryMappings.CAREER.defaultTimeWindow, ['after_work', 'weekends']);
+    assert.deepEqual(categoryMappings.JOB.defaultTimeWindow, ['business_hours']);
+  });
+});

@@ -1,3 +1,9 @@
+import type { TaskCategory } from '../../supabase/functions/_shared/categories.ts';
+
+// The category list lives in the shared module (screens + edge functions read the same one).
+// Re-exported so screens can `import type { TaskCategory } from '@/types/task'`.
+export type { TaskCategory };
+
 export interface ChecklistItem {
   id: string;
   task_id: string;
@@ -14,7 +20,7 @@ export interface Task {
   description?: string;
   status: 'BLOCKED' | 'LIFE' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'IN_REVIEW' | 'DONE' | 'BACKLOG' | 'TODO';
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION' | 'PROF_EDUCATION' | 'PERSONAL';
+  category: TaskCategory;
   due_date?: string;
   start_time?: string;
   end_time?: string;

@@ -210,7 +210,7 @@ serve(async (req) => {
       console.log('[CONFIG-TRACE] VENTURES mapping:', JSON.stringify(userConfig.categoryMappings.VENTURES));
     }
     console.log('[CONFIG-TRACE] resolved EDUCATION:', JSON.stringify(resolvedCategoryMappings.EDUCATION || resolvedCategoryMappings.PROF_EDUCATION));
-    console.log('[CONFIG-TRACE] using defaults?', resolvedCategoryMappings === DEFAULT_CATEGORY_MAPPINGS ? 'YES' : 'NO');
+    console.log('[CONFIG-TRACE] using defaults?', userConfig?.categoryMappings ? 'NO (saved rows, defaults fill gaps)' : 'YES');
 
     // ===============================================
     // DAY-OF-WEEK FILTERING: Remove inapplicable windows

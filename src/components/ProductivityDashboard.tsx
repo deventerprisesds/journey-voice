@@ -12,7 +12,7 @@ import {
   BarChart3,
   Zap
 } from 'lucide-react';
-import { Task } from '@/types/task';
+import { Task, TaskCategory } from '@/types/task';
 import { itineraryEngine } from '@/utils/ItineraryEngine';
 
 interface ProductivityDashboardProps {
@@ -57,12 +57,16 @@ const ProductivityDashboard: React.FC<ProductivityDashboardProps> = ({ tasks }) 
       LOW: tasks.filter(t => t.priority === 'LOW').length,
     };
 
-    // Category distribution
-    const categoryStats = {
+    // Category distribution. Typed by the shared list so a missing category is a type error.
+    // PERSONAL and PROF_EDUCATION have never had a tile here (unchanged). JOB is APPENDED last, not
+    // placed before CAREER: the tiles sit in a 4-column grid, so a 5th tile anywhere else would move
+    // Career/Ventures/Education; last keeps the four existing tiles exactly where they are.
+    const categoryStats: Record<Exclude<TaskCategory, 'PERSONAL' | 'PROF_EDUCATION'>, number> = {
       LIFE: tasks.filter(t => t.category === 'LIFE').length,
       CAREER: tasks.filter(t => t.category === 'CAREER').length,
       VENTURES: tasks.filter(t => t.category === 'VENTURES').length,
       EDUCATION: tasks.filter(t => t.category === 'EDUCATION').length,
+      JOB: tasks.filter(t => t.category === 'JOB').length,
     };
 
     // Average completion time

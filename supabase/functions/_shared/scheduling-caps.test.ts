@@ -17,6 +17,8 @@ import {
 } from './scheduling-defaults.ts';
 
 const BUILDER = readFileSync(new URL('../nightly-schedule-builder/index.ts', import.meta.url), 'utf8');
+const RULES = readFileSync(new URL('./keyword-rules.ts', import.meta.url), 'utf8');
+import { activeWindowNamesForDay } from './keyword-rules.ts';
 const owner = (prof: Record<string, unknown>) => ({ categoryMappings: { PROF_EDUCATION: prof } });
 const FB = { fallback: MAX_ASSIGNMENTS_PER_DAY };
 
@@ -60,8 +62,15 @@ describe('P2 coursework caps from Settings', () => {
   it('AC-P2-3 weekend coursework only uses the weekends window (10–20); weekday evening 19–22 untouched', () => {
     // getActiveWindows (builder) drops every non-weekend window on Sat/Sun, so 19–22 `evening`
     // is never offered on a weekend; P2 changes only the count, not the windows.
-    assert.ok(/if \(isWeekend && name !== 'weekends'\) continue;/.test(BUILDER));
-    assert.ok(/if \(!isWeekend && name === 'weekends'\) continue;/.test(BUILDER));
+    // Since 2026-11-04 the rule lives in _shared/keyword-rules.ts (activeWindowNamesForDay) so the daily QC
+    // check uses the same windows; the builder must still route through it.
+    assert.ok(/activeWindowNamesForDay\(timeWindows, targetDayOfWeek\)/.test(BUILDER));
+    assert.ok(/if \(isWeekend && name !== 'weekends'\) continue;/.test(RULES));
+    assert.ok(/if \(!isWeekend && name === 'weekends'\) continue;/.test(RULES));
+    const evening = { start: 19, end: 22, days: [0, 1, 2, 3, 4, 5, 6] };
+    const weekends = { start: 10, end: 20, days: [0, 6] };
+    assert.deepEqual(activeWindowNamesForDay({ evening, weekends }, 6), ['weekends']);
+    assert.deepEqual(activeWindowNamesForDay({ evening, weekends }, 3), ['evening']);
   });
 
   it('TZ-1 isWeekendInTimezone uses the owner\'s zone: Fri 9 pm ET (Sat 01:00Z) is a weekday', () => {

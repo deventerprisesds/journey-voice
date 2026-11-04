@@ -4445,6 +4445,7 @@ export type Database = {
         | "EDUCATION"
         | "PROF_EDUCATION"
         | "PERSONAL"
+        | "JOB"
       task_priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT"
       task_source: "CHAT" | "EMBA_SHEET" | "MIT_SHEET" | "MANUAL"
       task_status:
@@ -4613,6 +4614,7 @@ export const Constants = {
         "EDUCATION",
         "PROF_EDUCATION",
         "PERSONAL",
+        "JOB",
       ],
       task_priority: ["LOW", "MEDIUM", "HIGH", "URGENT"],
       task_source: ["CHAT", "EMBA_SHEET", "MIT_SHEET", "MANUAL"],

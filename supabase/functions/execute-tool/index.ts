@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
 import { activityBusySlots, resolveActivities, normalizeActivity, matchActivity, planPush, toMinutes, minutesToHHMM, parseClockTime, type PushItem } from "../_shared/activities.ts";
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
+import { CATEGORY_KEYS, normalizeCategory, recognizeCategory } from "../_shared/categories.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, activeCaveats } from "../_shared/scheduling-defaults.ts";
 import { runDedup, finalizeDedup, undoDedupSkips, type DedupLogEntry } from "../_shared/task-dedup.ts";
@@ -921,7 +922,7 @@ async function createTask(supabase: any, userId: string, args: any): Promise<Exe
       title: args.title,
       description: args.description || null,
       priority: args.priority?.toUpperCase() || 'MEDIUM',
-      category: args.category?.toUpperCase() || 'LIFE',
+      category: normalizeCategory(args.category),
       status: 'BACKLOG',
       board_id: board.id,
       user_id: userId
@@ -999,7 +1000,13 @@ async function updateTask(supabase: any, userId: string, args: any): Promise<Exe
     if (args.description !== undefined) updateData.description = args.description;
     if (args.status) updateData.status = args.status.toUpperCase();
     if (args.priority) updateData.priority = args.priority.toUpperCase();
-    if (args.category) updateData.category = args.category.toUpperCase();
+    let categoryKept: string | null = null;
+    if (args.category) {
+      // An unrecognised category keeps the task's current one (it used to fail on the enum and change nothing).
+      const cat = recognizeCategory(args.category);
+      if (cat) updateData.category = cat;
+      else { categoryKept = String(args.category); console.warn(`[UPDATE_TASK] category "${categoryKept}" is not a category; kept the current one`); }
+    }
     // Huddle scrum-master grooming: assign the task to a specific agent + apply labels.
     // assigned_agent is a Huddle agent id (e.g. "finn-reid"); pass null/"" to clear.
     if (args.assigned_agent !== undefined) {
@@ -1019,7 +1026,9 @@ async function updateTask(supabase: any, userId: string, args: any): Promise<Exe
     // Guard the empty-update case cleanly instead of letting `.update({})…single()` surface the
     // opaque coerce error (an unmapped-only args set would otherwise repeat the bug above).
     if (!Object.keys(updateData).length) {
-      return { success: false, error: "No updatable fields provided" };
+      return { success: false, error: categoryKept
+        ? `"${categoryKept}" is not a category (use one of: ${CATEGORY_KEYS.join(', ')}); the task was not changed`
+        : "No updatable fields provided" };
     }
 
     const { data, error } = await supabase
@@ -1041,8 +1050,10 @@ async function updateTask(supabase: any, userId: string, args: any): Promise<Exe
 
     return {
       success: true,
-      result: { task: data },
-      message: `Updated task "${data.title}"`
+      result: { task: data, ...(categoryKept ? { category_not_changed: categoryKept } : {}) },
+      message: categoryKept
+        ? `Updated task "${data.title}" (category "${categoryKept}" is not a category, so it stays ${data.category})`
+        : `Updated task "${data.title}"`
     };
   } catch (error) {
     return { success: false, error: extractErrorMessage(error) };
@@ -1065,7 +1076,11 @@ async function batchUpdateTasks(supabase: any, userId: string, args: any): Promi
     if (u.description !== undefined) data.description = u.description;
     if (u.status) data.status = String(u.status).toUpperCase();
     if (u.priority) data.priority = String(u.priority).toUpperCase();
-    if (u.category) data.category = String(u.category).toUpperCase();
+    if (u.category) {
+      const cat = recognizeCategory(u.category);
+      if (cat) data.category = cat;
+      else console.warn(`[BATCH_UPDATE] category "${u.category}" is not a category; kept the current one`);
+    }
     if (u.assigned_agent !== undefined) data.assigned_agent = u.assigned_agent ? String(u.assigned_agent) : null;
     if (u.tags !== undefined) data.tags = Array.isArray(u.tags) ? u.tags.map((t: unknown) => String(t)) : [];
     if (u.definition_of_done !== undefined) data.definition_of_done = u.definition_of_done ? String(u.definition_of_done) : null;
@@ -1872,7 +1887,7 @@ async function parseAndCreateTasks(
         title: task.title,
         description: task.description || null,
         priority: (task.priority || 'MEDIUM').toUpperCase(),
-        category: (task.category || 'LIFE').toUpperCase(),
+        category: normalizeCategory(task.category),
         status: task.status || args.default_status || ((normalizedStartTime || normalizedDueDate) ? 'UP_NEXT' : 'BACKLOG'),
         is_priority: isPriority,
         due_date: normalizedDueDate,

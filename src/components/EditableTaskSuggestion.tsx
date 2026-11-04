@@ -6,12 +6,13 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import type { TaskCategory } from '@/types/task';
 
 interface TaskSuggestion {
   title: string;
   description?: string;
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION' | 'PROF_EDUCATION';
+  category: TaskCategory;
   estimate_minutes: number;
   scheduledStart: string;
   aiReasoning: string;
@@ -156,7 +157,7 @@ const EditableTaskSuggestion: React.FC<EditableTaskSuggestionProps> = ({
                     <label className="text-sm font-medium">Category</label>
                     <Select
                       value={editedSuggestion.category}
-                      onValueChange={(value: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION' | 'PROF_EDUCATION') =>
+                      onValueChange={(value: TaskCategory) =>
                         setEditedSuggestion({
                           ...editedSuggestion,
                           category: value
@@ -168,6 +169,7 @@ const EditableTaskSuggestion: React.FC<EditableTaskSuggestionProps> = ({
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="LIFE">Life</SelectItem>
+                        <SelectItem value="JOB">Job</SelectItem>
                         <SelectItem value="CAREER">Career</SelectItem>
                         <SelectItem value="VENTURES">Ventures</SelectItem>
                         <SelectItem value="EDUCATION">Education</SelectItem>

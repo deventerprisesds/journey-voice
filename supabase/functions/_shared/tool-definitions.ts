@@ -11,6 +11,8 @@
  * edge function to update the OpenAI Assistant's static tool list.
  */
 
+import { CATEGORY_KEYS } from './categories.ts';
+
 export interface ToolDefinition {
   type: "function";
   name: string;
@@ -45,8 +47,8 @@ export function getToolDefinitions(): ToolDefinition[] {
           },
           category: {
             type: "string",
-            enum: ["LIFE", "CAREER", "VENTURES", "PROF_EDUCATION", "EDUCATION", "PERSONAL"],
-            description: "Life area filter. Use for area-specific queries like 'life tasks', 'career items'."
+            enum: [...CATEGORY_KEYS],
+            description: "Life area filter. Use for area-specific queries like 'life tasks', 'job tasks', 'career items'. JOB = work for the employer; CAREER = getting the next role."
           }
         }
       }
@@ -85,7 +87,7 @@ export function getToolDefinitions(): ToolDefinition[] {
             description: "Task workflow status. IN_REVIEW = finished, awaiting the user's approval before DONE."
           },
           priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
-          category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] },
+          category: { type: "string", enum: [...CATEGORY_KEYS], description: "JOB = work for the employer; CAREER = getting the next role; VENTURES = the owner's own products and clients." },
           assigned_agent: { type: "string", description: "Huddle agent id to assign this task to (e.g. finn-reid). Pass empty string to unassign." },
           tags: { type: "array", items: { type: "string" }, description: "Labels for the task (e.g. needs-plaid, quick-win). Replaces existing tags." }
         },
@@ -150,7 +152,7 @@ export function getToolDefinitions(): ToolDefinition[] {
             description: "Named time windows to prefer, in order. MUST be existing window names: morning, business_hours, after_work, evening, weekends. Never invent a name."
           },
           keywords: { type: "array", items: { type: "string" }, description: "Match tasks whose TITLE contains any of these, e.g. ['research','explore']. Omit to match on category/tags instead." },
-          categories: { type: "array", items: { type: "string" }, description: "Match tasks in any of these categories: CAREER, PROF_EDUCATION, EDUCATION, VENTURES, LIFE, PERSONAL" },
+          categories: { type: "array", items: { type: "string" }, description: `Match tasks in any of these categories: ${CATEGORY_KEYS.join(', ')}` },
           tags: { type: "array", items: { type: "string" }, description: "Match tasks carrying any of these tags" },
           expires_at: { type: "string", description: "ISO timestamp when this stops applying. OMIT for 'until I clear it' — do not guess an expiry the user did not state." }
         },
@@ -367,7 +369,7 @@ export function getToolDefinitions(): ToolDefinition[] {
           date: { type: "string", description: "Optional YYYY-MM-DD or 'today'/'tomorrow'" },
           window: { type: "string", enum: ["morning", "business_hours", "after_work", "evening"], description: "Optional preferred window — scheduler picks exact time" },
           duration_minutes: { type: "number", description: "Estimated duration. Default 30." },
-          category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION", "PROF_EDUCATION", "PERSONAL"], description: "Defaults to LIFE" },
+          category: { type: "string", enum: [...CATEGORY_KEYS], description: "Defaults to LIFE" },
           priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"], description: "Defaults to MEDIUM" },
           auto_schedule: { type: "boolean", description: "If true (default), find a slot automatically." }
         },
