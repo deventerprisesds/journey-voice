@@ -103,3 +103,22 @@ Nothing main does today is removed. `notification-delivery`, `notification-sched
    Expected: a row newer than 2026-10-14 22:15, `status='completed'`, `metadata.matched=1`, `metadata.status='DONE'`. The task shows `DONE` with `completed_at` set.
 5. Only the owner's tap on the real phone confirms it. Until then the status is "implemented, mechanism verified locally (tests + mutations), NOT yet confirmed live".
 6. J14: the next app open writes an `fcm_token_registered` row (`metadata.source`). Before this, the last one was 2026-10-15.
+
+---
+
+## Re-sync 2026-11-04 (merge of main into the branch; PR still NOT to be merged before APK 1.0.13)
+
+Labels as above: **O** = observed in this pass, **I** = inferred.
+
+### R1. Merge (O)
+- Branch head before: `5786676`. Old merge base: `569dbb8`. `origin/main` merged: **`3bb80f0`** (#90). The branch was 36 ahead / 127 behind.
+- Done with `git merge origin/main`, no rebase and no force-push. Merge commit: `51af0bc`.
+- **Conflicts (2), both resolved keeping both sides:**
+  - `supabase/config.toml`: main had already landed the same seven `verify_jwt = false` pins (`40ce8e1`, restore J6), next to where the branch adds `[functions.alarm-action]`. Resolved to the branch's alarm-action block followed by main's pins. 53 `[functions.*]` sections, no duplicate.
+  - `supabase/functions/execute-tool/index.ts` imports: the branch's `mintCaller` import plus main's `task-dedup` and `calendar-edit` imports. The `register_push_token` gate auto-merged in front of `executeToolCall`. `userId`, `supabase` and `SUPABASE_SERVICE_KEY` are still in scope there with the same names.
+- **Auto-merged:** `send-push-notification` (main's #69 `sticky` flag and the branch's mint/prune are separate hunks; the mint still runs after `fcmData` is built). Main has no commits since the old base on `manage-push-subscription` or `alarm-action`. Main changed `deploy-supabase-functions.yml` (`1184f8d`: all-mode deploys one function at a time and keeps going past a failure; `b6efe34`: `--yes`). The branch does not touch that workflow.
+- **Migration:** `20261027210000_push_subscriptions_rls_lockdown.sql` is still unapplied. No workflow applies migrations on push (`apply-supabase-migration.yml` is `workflow_dispatch` for one named file), so merging does not apply it either.
+
+### R2. Tests on the merged tree (O)
+- `npm test`: **601 tests, 601 pass, 0 fail** (`scripts/run-tests.mjs`; roots are src, supabase/functions, cloudflare/src, scripts).
+- The probes in `docs/qc-evidence/probes/` are NOT in those roots. Run on their own: 18/18 pass.
