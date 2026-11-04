@@ -54,4 +54,8 @@ describe('buildCategoryGuide', () => {
     assert.match(g, /- JOB: esri/);
     assert.match(g, /- VENTURES: huddle, nexus/);
   });
+  it('G-7 the hint list says the SDLC rule beats a product hint (live scorecard E-21 miss, 2026-11-04)', () => {
+    const g = buildCategoryGuide({ hints: [{ name: 'sidecar', category: 'VENTURES' }] });
+    assert.match(g, /NAME HINTS .*EXCEPT that rule 1 below always wins: SDLC/);
+  });
 });
