@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { format, addDays, startOfDay, differenceInDays, isAfter, isBefore } from 'date-fns';
 import { cn } from '@/lib/utils';
+import type { TaskCategory } from '@/types/task';
 
 interface Task {
   id: string;
@@ -22,7 +23,7 @@ interface Task {
   description?: string;
   status: 'BLOCKED' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'DONE' | 'BACKLOG' | 'TODO';
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION' | 'PROF_EDUCATION';
+  category: TaskCategory;
   due_date?: string;
   start_time?: string;
   end_time?: string;

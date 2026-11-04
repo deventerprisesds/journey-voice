@@ -30,7 +30,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Task, ExternalCalendarEvent } from '@/types/task';
+import { Task, ExternalCalendarEvent, TaskCategory } from '@/types/task';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig } from '@/config/schedulingRules';
@@ -108,8 +108,11 @@ const priorityBadgeColors: Record<string, string> = {
 };
 
 // Category colors matching TaskCard
-const categoryColors: Record<string, string> = {
+// Typed by the shared category list so a category missing here is a type error.
+// PERSONAL is excluded on purpose: it never had an entry here, so its lookup stays undefined (unchanged).
+const categoryColors: Record<Exclude<TaskCategory, 'PERSONAL'>, string> = {
   LIFE: 'bg-category-life/10 text-category-life border-category-life/20',
+  JOB: 'bg-category-job/10 text-category-job border-category-job/20',
   CAREER: 'bg-category-career/10 text-category-career border-category-career/20',
   VENTURES: 'bg-category-ventures/10 text-category-ventures border-category-ventures/20',
   EDUCATION: 'bg-category-education/10 text-category-education border-category-education/20',

@@ -10,7 +10,7 @@ import { DEFAULT_SCHEDULING_CONFIG, mergeSchedulingConfig } from '@/config/sched
 import CategoryColumn from '@/components/priorities/CategoryColumn';
 import PriorityLane from '@/components/priorities/PriorityLane';
 import TaskDetailModal from '@/components/TaskDetailModal';
-import type { Task } from '@/types/task';
+import type { Task, TaskCategory } from '@/types/task';
 import { toast } from 'sonner';
 
 export interface TopicGroupData {
@@ -41,7 +41,8 @@ export interface CategoryRef {
   label: string;
 }
 
-const CATEGORY_COLORS: Record<string, string> = {
+const CATEGORY_COLORS: Record<TaskCategory, string> = {
+  JOB: 'hsl(var(--category-job))',
   CAREER: 'hsl(var(--category-career))',
   PROF_EDUCATION: 'hsl(var(--category-education))',
   EDUCATION: 'hsl(var(--category-education))',
@@ -50,7 +51,8 @@ const CATEGORY_COLORS: Record<string, string> = {
   PERSONAL: 'hsl(var(--category-life))',
 };
 
-const CATEGORY_LABELS: Record<string, string> = {
+const CATEGORY_LABELS: Record<TaskCategory, string> = {
+  JOB: 'Job',
   CAREER: 'Career',
   PROF_EDUCATION: 'Prof. Education',
   EDUCATION: 'Education',

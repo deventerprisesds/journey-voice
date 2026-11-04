@@ -93,6 +93,7 @@ export default {
         // Category colors
         category: {
           life: "hsl(var(--category-life))",
+          job: "hsl(var(--category-job))",
           career: "hsl(var(--category-career))",
           ventures: "hsl(var(--category-ventures))",
           education: "hsl(var(--category-education))",

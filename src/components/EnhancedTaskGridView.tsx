@@ -39,7 +39,7 @@ import { formatDateOnly, formatDuration } from '@/lib/date';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
-import { Task } from '@/types/task';
+import { Task, TaskCategory } from '@/types/task';
 import SmartTaskInput from './SmartTaskInput';
 
 interface TaskGridViewProps {
@@ -73,8 +73,11 @@ const statusColors = {
   PLANNING: 'bg-yellow-50 text-yellow-700',
 };
 
-const categoryColors = {
+// Typed by the shared category list so a category missing here is a type error.
+// PERSONAL is excluded on purpose: it never had an entry here, so its lookup stays undefined (unchanged).
+const categoryColors: Record<Exclude<TaskCategory, 'PERSONAL'>, string> = {
   LIFE: 'bg-pink-100 text-pink-700 border-pink-300',
+  JOB: 'bg-lime-100 text-lime-700 border-lime-300',
   CAREER: 'bg-blue-100 text-blue-700 border-blue-300',
   VENTURES: 'bg-green-100 text-green-700 border-green-300',
   EDUCATION: 'bg-purple-100 text-purple-700 border-purple-300',
@@ -1167,7 +1170,7 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
                                                'category', 
                                                task.category, 
                                                'select', 
-                                               ['LIFE', 'CAREER', 'VENTURES', 'EDUCATION']
+                                               ['LIFE', 'JOB', 'CAREER', 'VENTURES', 'EDUCATION']
                                              )}
                                              {editingCell?.taskId !== task.id || editingCell?.field !== 'category' ? (
                                                <Badge 
