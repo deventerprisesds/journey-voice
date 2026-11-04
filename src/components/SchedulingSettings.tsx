@@ -17,6 +17,7 @@ import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig, type SchedulingCaveat
 import { Clock, Calendar, TrendingUp, Tag, Key, Target, Plus, X, FileText, Globe, Timer } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import ActivitiesSettings from '@/components/ActivitiesSettings';
+import ConflictRulesSettings from '@/components/ConflictRulesSettings';
 import { TIMEZONE_OPTIONS, getBrowserTimezone, formatTimezoneWithOffset } from '@/lib/timezone';
 import { CATEGORY_KEYS, CATEGORY_LABELS, toCategoryKey } from '../../supabase/functions/_shared/categories.ts';
 
@@ -514,6 +515,13 @@ const SchedulingSettings: React.FC = () => {
         </CardContent>
       </Card>
 
+      {/* Conflict rules: who wins when tasks want the same time (owner-defined, no seeds) */}
+      <ConflictRulesSettings
+        rules={config.conflictRules ?? []}
+        categories={Object.keys(config.categoryMappings ?? {})}
+        onChange={(conflictRules) => setConfig({ ...config, conflictRules })}
+      />
+
       {/* Category Mappings */}
       <Card>
         <CardHeader>
@@ -578,6 +586,24 @@ const SchedulingSettings: React.FC = () => {
                       ℹ️ Tasks can be scheduled in any of these time windows
                     </p>
                   )}
+                  <div className="flex items-start gap-2 mt-2">
+                    <Checkbox
+                      id={`kw-leave-${category}`}
+                      checked={(mapping as any).keywordsCanLeaveWindows !== false}
+                      onCheckedChange={(v) =>
+                        setConfig({
+                          ...config,
+                          categoryMappings: {
+                            ...config.categoryMappings,
+                            [category]: { ...mapping, keywordsCanLeaveWindows: v === true },
+                          },
+                        })
+                      }
+                    />
+                    <Label htmlFor={`kw-leave-${category}`} className="text-xs font-normal leading-snug">
+                      Keywords may move these tasks outside these windows
+                    </Label>
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <Label className="text-sm">Board Lane</Label>
