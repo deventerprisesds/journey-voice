@@ -389,6 +389,33 @@ const SchedulingSettings: React.FC = () => {
             />
             <Label htmlFor="assignment-sessions-enabled" className="text-sm">Spread assignments into work sessions</Label>
           </div>
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="assignment-sessions-one-paper"
+              checked={(config.assignmentSessions ?? DEFAULT_SCHEDULING_CONFIG.assignmentSessions!).onePaperPerDay !== false}
+              onCheckedChange={(v) => setConfig({
+                ...config,
+                assignmentSessions: { ...(config.assignmentSessions ?? DEFAULT_SCHEDULING_CONFIG.assignmentSessions!), onePaperPerDay: v === true },
+              })}
+            />
+            <Label htmlFor="assignment-sessions-one-paper" className="text-sm">Only one paper a night (a reading or PowerPoint can share the night)</Label>
+          </div>
+          <div className="space-y-2">
+            <Label className="text-sm">Words that mark a lighter, finite assignment (comma-separated)</Label>
+            {/* Committed on blur: splitting on every keystroke would eat the comma being typed. */}
+            <Input
+              key={(config.assignmentSessions?.finiteTypeKeywords ?? []).join('|')}
+              defaultValue={((config.assignmentSessions ?? DEFAULT_SCHEDULING_CONFIG.assignmentSessions!).finiteTypeKeywords
+                ?? DEFAULT_SCHEDULING_CONFIG.assignmentSessions!.finiteTypeKeywords ?? []).join(', ')}
+              onBlur={(e) => setConfig({
+                ...config,
+                assignmentSessions: {
+                  ...(config.assignmentSessions ?? DEFAULT_SCHEDULING_CONFIG.assignmentSessions!),
+                  finiteTypeKeywords: e.target.value.split(',').map((w) => w.trim()).filter(Boolean),
+                },
+              })}
+            />
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {([
               ['finishBufferDays', 'Finish this many days before due', 0, 30],

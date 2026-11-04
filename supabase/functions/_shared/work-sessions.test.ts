@@ -9,7 +9,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  planWorkSessions, courseworkWindowsFor, resolveSessionConfig, DEFAULT_SESSION_CONFIG, sessionKey,
+  planWorkSessions, courseworkWindowsFor, resolveSessionConfig, DEFAULT_SESSION_CONFIG, sessionKey, isFiniteAssignment,
   buildSessionWarningLines, AT_RISK_TAG, RETIRED_TAG, SESSION_TAG,
   type ParentTask, type SessionTask, type DayAvailability, type SessionPlan,
 } from './work-sessions.ts';
@@ -330,5 +330,84 @@ describe('P4 early warning', () => {
     assert.equal(still.warnings.length, 0);
     const fits = run({ parents: [parent({ ...CP2_EARLY, tags: [AT_RISK_TAG] })] });
     assert.deepEqual(fits.parentTagPatches, [{ taskId: 'p-cp2', tags: [] }]);
+  });
+});
+
+describe('P3 one paper a night (owner 2026-11-04)', () => {
+  // "It's not realistic that i would switch back and forth between papers in the same night. two more
+  // finite assignment types like readings or powerpint maybe"
+  const BIG = parent({ id: 'p-x', title: '📚 Big Project', assignment_id: 'x', estimate_minutes: 900, due_date: '2026-11-20T04:59:59Z' });
+  const READING = parent({ id: 'p-read', title: '📚 Week 10 Readings', assignment_id: 'r', estimate_minutes: 180, due_date: '2026-11-07T04:59:59Z' });
+  const DECK = parent({ id: 'p-deck', title: '📚 Group PowerPoint', assignment_id: 'd', estimate_minutes: 180, due_date: '2026-11-07T04:59:59Z' });
+  const NOV4 = new Date('2026-11-04T05:00:00Z');
+  const papersByDay = (p: SessionPlan, parents: ParentTask[]) => {
+    const isPaper = new Map(parents.map((x) => [x.id, !isFiniteAssignment(x.title, DEFAULT_SESSION_CONFIG.finiteTypeKeywords)]));
+    const m: Record<string, Set<string>> = {};
+    for (const c of p.creates) if (isPaper.get(c.parentId)) (m[c.placement.date] ??= new Set()).add(c.parentId);
+    return m;
+  };
+
+  it('AC-P3-15 no night holds sessions of two different papers (Checkpoint 2, Research Paper, a 900-min project)', () => {
+    const ps = [CP2, PAPER, BIG];
+    const p = run({ parents: ps, now: NOV4, days: days('2026-11-04', 40) });
+    const m = papersByDay(p, ps);
+    assert.ok(Object.keys(m).length > 0);
+    for (const [d, set] of Object.entries(m)) assert.equal(set.size, 1, `${d}: ${[...set].join(', ')}`);
+  });
+
+  it('AC-P3-15b a reading or a PowerPoint CAN share the night with a paper', () => {
+    const ps = [CP2, READING];
+    const p = run({ parents: ps, now: NOV4, days: days('2026-11-04', 10) });
+    const byDay: Record<string, Set<string>> = {};
+    for (const c of p.creates) (byDay[c.placement.date] ??= new Set()).add(c.parentId);
+    assert.ok(Object.values(byDay).some((set) => set.has('p-cp2') && set.has('p-read')), JSON.stringify(Object.fromEntries(Object.entries(byDay).map(([d, s]) => [d, [...s]]))));
+  });
+
+  it('AC-P3-15b2 a PowerPoint shares the night the same way', () => {
+    const p = run({ parents: [CP2, DECK], now: NOV4, days: days('2026-11-04', 10) });
+    const byDay: Record<string, Set<string>> = {};
+    for (const c of p.creates) (byDay[c.placement.date] ??= new Set()).add(c.parentId);
+    assert.ok(Object.values(byDay).some((set) => set.has('p-cp2') && set.has('p-deck')));
+  });
+
+  it('AC-P3-15c the Settings switch turns it off: two papers may share a night again', () => {
+    const ps = [CP2, PAPER, BIG];
+    const p = run({ parents: ps, now: NOV4, days: days('2026-11-04', 40), config: { ...DEFAULT_SESSION_CONFIG, onePaperPerDay: false } });
+    assert.ok(Object.values(papersByDay(p, ps)).some((set) => set.size > 1));
+  });
+
+  it('AC-P3-15d a session the owner moved by hand still counts: no other paper is added to that night', () => {
+    const pinnedPaper: SessionTask = {
+      id: 's-pin', title: '📚 Research Paper 1 of 2', status: 'UP_NEXT', completed_at: null,
+      assignment_id: sessionKey(PAPER.assignment_id!, 1), start_time: '2026-11-05T00:00:00.000Z', end_time: '2026-11-05T01:30:00.000Z',
+      estimate_minutes: 90, tags: [SESSION_TAG], scheduling_context: { session: { placed_start: '2026-11-06T00:00:00.000Z' } },
+    };
+    const p = run({ parents: [PAPER, CP2], sessions: [pinnedPaper], now: NOV4, days: days('2026-11-04', 40) });
+    assert.ok(!p.creates.some((c) => c.parentId === 'p-cp2' && c.placement.date === '2026-11-04'), JSON.stringify(p.creates.map((c) => [c.parentId, c.placement.date])));
+  });
+
+  it('AC-P3-15e finite types are matched by whole word from the editable list; anything else is a paper', () => {
+    const k = DEFAULT_SESSION_CONFIG.finiteTypeKeywords;
+    assert.equal(isFiniteAssignment('📚 Week 10 Readings', k), true);
+    assert.equal(isFiniteAssignment('📚 Group PowerPoint', k), true);
+    assert.equal(isFiniteAssignment('📚 Chapter 4', k), true);
+    assert.equal(isFiniteAssignment('📚 Research Paper', k), false);       // "research" is not "read"
+    assert.equal(isFiniteAssignment('📚 Checkpoint 2 - Details', k), false);
+    assert.equal(isFiniteAssignment('📚 Research Proposal', k), false);
+    const custom = resolveSessionConfig({ assignmentSessions: { finiteTypeKeywords: [' Quiz ', '', 7] } });
+    assert.deepEqual(custom.finiteTypeKeywords, ['quiz']);
+    assert.equal(isFiniteAssignment('📚 Week 3 Quiz', custom.finiteTypeKeywords), true);
+    assert.equal(resolveSessionConfig({ assignmentSessions: { onePaperPerDay: false } }).onePaperPerDay, false);
+    assert.equal(resolveSessionConfig({}).onePaperPerDay, true);
+  });
+
+  it('AC-P3-15f the app seeds the same switch and word list as the planner (Settings shows what runs)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../../../src/config/schedulingRules.ts', import.meta.url), 'utf8');
+    assert.match(src, /onePaperPerDay: true,/);
+    const m = src.match(/finiteTypeKeywords: \[([^\]]*)\]/);
+    assert.ok(m, 'seed list present');
+    const seeded = [...m![1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
+    assert.deepEqual(seeded, DEFAULT_SESSION_CONFIG.finiteTypeKeywords);
   });
 });
