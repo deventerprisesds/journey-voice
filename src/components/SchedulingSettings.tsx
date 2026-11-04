@@ -17,6 +17,7 @@ import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig, type SchedulingCaveat
 import { Clock, Calendar, TrendingUp, Tag, Key, Target, Plus, X, FileText, Globe, Timer } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import ActivitiesSettings from '@/components/ActivitiesSettings';
+import ConflictRulesSettings from '@/components/ConflictRulesSettings';
 import { TIMEZONE_OPTIONS, getBrowserTimezone, formatTimezoneWithOffset } from '@/lib/timezone';
 import { CATEGORY_KEYS, CATEGORY_LABELS, toCategoryKey } from '../../supabase/functions/_shared/categories.ts';
 
@@ -513,6 +514,13 @@ const SchedulingSettings: React.FC = () => {
           </p>
         </CardContent>
       </Card>
+
+      {/* Conflict rules: who wins when tasks want the same time (owner-defined, no seeds) */}
+      <ConflictRulesSettings
+        rules={config.conflictRules ?? []}
+        categories={Object.keys(config.categoryMappings ?? {})}
+        onChange={(conflictRules) => setConfig({ ...config, conflictRules })}
+      />
 
       {/* Category Mappings */}
       <Card>

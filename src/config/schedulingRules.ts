@@ -101,6 +101,24 @@ export interface SchedulingConfig {
    * education outranks Ventures. Backend contract: _shared/scheduling-defaults.ts resolveCategoryWeights.
    */
   categoryWeights?: Record<string, number>;
+  /**
+   * Owner-defined "wins when tasks compete for the same time" rules. Empty/undefined = no effect.
+   * Backend contract: supabase/functions/_shared/conflict-rules.ts (resolveConflictRules).
+   */
+  conflictRules?: ConflictRule[];
+}
+
+export type ConflictMatch =
+  | { kind: 'category'; value: string }
+  | { kind: 'tag'; value: string }
+  | { kind: 'coursework' };
+
+export interface ConflictRule {
+  id: string;
+  label?: string;
+  match: ConflictMatch;
+  weight: number;
+  enabled?: boolean;
 }
 
 // Default configuration blending all existing rules
@@ -359,6 +377,8 @@ export function mergeSchedulingConfig(
     assignmentSessions: { ...DEFAULT_SCHEDULING_CONFIG.assignmentSessions!, ...(userConfig.assignmentSessions ?? {}) },
     // Same pass-through rule: defaults under saved, so a seed applies until the owner changes it.
     categoryWeights: { ...DEFAULT_SCHEDULING_CONFIG.categoryWeights!, ...(userConfig.categoryWeights ?? {}) },
+    // Owner rules only; never seeded. A save of an unrelated setting must not drop them.
+    conflictRules: Array.isArray(userConfig.conflictRules) ? userConfig.conflictRules : [],
     // Same pass-through rule — but UNDEFINED when never saved, so the seed keeps applying and a save
     // of an unrelated setting never writes an empty list that would erase lunch.
     activities: Array.isArray(userConfig.activities) ? userConfig.activities : undefined,
