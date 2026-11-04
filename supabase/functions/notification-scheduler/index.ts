@@ -6,8 +6,8 @@ import {
   WEEKLY_DIGEST_LOCAL_HOUR,
   WEEKLY_DIGEST_LOCAL_WEEKDAY,
 } from "../_shared/digest-content.ts";
-import {
 import type { TaskCategory } from '../_shared/categories.ts';
+import {
   isInQuietHours,
   overdueRemindersAllowed,
   generateOverdueReminders,
