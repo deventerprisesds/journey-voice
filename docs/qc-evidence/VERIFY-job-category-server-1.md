@@ -158,3 +158,67 @@ applied, the parser prompt now OFFERS JOB and `normalizeCategory('JOB')` keeps i
 with `invalid input value for enum task_category` until the migration runs. No fallback exists in code. The
 migration must be applied (MCP `apply_migration`) BEFORE the merge to main.
 
+## Claim 10 -- ROLLOUT-job-category.sql scoped to the owner, idempotent, never overwrites existing keyword rows: CONFIRMED with one caveat (D-6)
+
+Read in full (not run; no writes made by the verifier).
+- Every one of the 5 steps has `WHERE user_id = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1'`. Step 1 is by id (5 ids,
+  matching AC-A4), changes only `category`.
+- Idempotent on a re-run with no intervening edits: steps 1-4 write constant values; step 5 is guarded by
+  `AND NOT (config->'contextRules'->'keywords' ? r.k)`.
+- Keyword rows: step 4 changes ONLY element `'1'` (the lane) of the 13 ruled keys and only where the key exists
+  (`? k`), so a deleted key is not re-created and no window changes; step 5 adds 13 name-hint rows only where
+  absent. The live map has none of those 13 hint keys today (SELECT above). Never writes the code defaults.
+- **D-6 (category rows, not keyword rows):** step 3 `jsonb_set(config, '{categoryMappings,JOB}', <fixed row>, true)`
+  and `'{categoryMappings,CAREER,defaultTimeWindow}'` overwrite UNCONDITIONALLY. Once the code is live, Settings
+  shows a JOB row (client merge), so if the owner saves a JOB choice before this runs -- or the script is re-run
+  later -- his JOB row and CAREER windows are reset. Guard step 3's JOB write with
+  `AND NOT (config->'categoryMappings' ? 'JOB')` if that matters.
+- Side note on step 5: the 13 `flexible` rows are skipped by the shared matcher (window `flexible`), but
+  `schedulingService.extractSchedulingContext` (unchanged, ungated, no flexible skip, `break` on first hit) will
+  match them for uncategorised tasks: e.g. "esri"/"sdlc" (4 chars) sort before most keywords, so an uncategorised
+  "Esri meeting" gets `timeWindow: 'flexible'` from `esri` instead of `meeting -> business_hours`. Small, but a
+  behaviour change on the path the owner said stays as today.
+
+## Mutations re-run by the verifier (mutate.sh, /usr/local/bin)
+
+| # | File | Mutation | Test cmd / pattern | Outcome |
+|---|---|---|---|---|
+| M-1 | `_shared/keyword-rules.ts` | delete the gate line `if (gated && lane && !laneCoversCategory(...)) continue;` | keyword-rules.test.ts / `S-2 keyword pick` | **FIRED**, restored, tree clean |
+| M-2 | `_shared/keyword-rules.ts` | gate `continue` -> `return null` (stop instead of keep scanning) | keyword-rules.test.ts / `S-25 keyword pick` | **FIRED**, restored, tree clean |
+| M-3 | `nightly-schedule-builder/index.ts` | drop `task.category` from the `getKeywordWindowOverride(...)` call (scheduler becomes ungated) | `npm test` / `keyword pick` | **INERT** -- full suite green |
+| M-4 | `src/utils/dailyReviewPipeline.ts` | drop `category: task.category,` from the QC call (QC becomes ungated) | `npm test` / `keyword pick` | **INERT** -- full suite green |
+
+(A first M-3 run with pattern `index.ts wiring` matched an UNRELATED notification-scheduler test of the same
+name; discarded and re-run.) M-3/M-4 are not equivalent mutations: they turn the gate off in production.
+**D-7: the two production call sites of the gate have no test.** The matcher is proven; whether the scheduler
+and QC actually pass the category is not. So claim 9's "9 mutations FIRED" can be true of the matcher while
+the wiring that makes the gate matter is unguarded.
+
+## Verdict summary
+
+| Claim | Verdict |
+|---|---|
+| 1 shared list, exact-first normalise | CONFIRMED (D-1 networking->JOB, D-2 one leftover union) |
+| 2 one gate in scheduler + QC; extractSchedulingContext unchanged | **REFUTED** -- QC uses a different active-window set on weekends (D-3); no QC test |
+| 3 resolveConfig fill; JOB/CAREER defaults; smart-calendar + timeWindows know JOB | CONFIRMED |
+| 4 13 keywords -> JOB, interview CAREER, none removed | CONFIRMED (50 -> 50, 13 changed) |
+| 5 parser category guide, one read each, output normalised | CONFIRMED (N-1 silent read error, N-2 appointment hint) |
+| 6 execute-tool normalises; quick_create left | CONFIRMED, with D-4 (unknown -> LIFE on UPDATE, silently) |
+| 7 tool enums from CATEGORY_KEYS | CONFIRMED |
+| 8 migration + types.ts | CONFIRMED in code; not applied live; D-5 rollout order |
+| 9 490/490; mutations FIRED | 490/490 CONFIRMED; matcher mutations FIRED; wiring mutations INERT (D-7) |
+| 10 rollout SQL scoped, idempotent, no keyword-row overwrite | CONFIRMED with caveat D-6 |
+
+## Defects (ordered by impact)
+
+- **D-3** QC vs scheduler weekend window sets differ (`dailyReviewPipeline.ts:705-716` vs
+  `nightly-schedule-builder/index.ts:134-154`). Live config makes it real (`evening.days` includes 0 and 6).
+  Fix shape: QC should use the scheduler's weekend enforcement (only `weekends` on Sat/Sun, never on weekdays).
+- **D-5** Merge-before-migration breaks every JOB insert (edge fns auto-deploy on push to main).
+- **D-4** UPDATE/batch paths silently re-file an unmappable category to LIFE, no log line (AC-D5).
+- **D-7** No test covers the scheduler's or QC's call into the gate (M-3, M-4 INERT).
+- **D-6** Rollout step 3 overwrites a saved JOB row / CAREER windows unconditionally.
+- **D-1** `normalizeCategory('networking')` = JOB (AC N-8).
+- **D-2** `notification-scheduler/index.ts:28` hand-written category union without JOB.
+- Minor: task category `""` gates out every category-lane keyword; name-hint `appointment` row; flexible hint rows
+  are matched by the ungated `extractSchedulingContext`.
