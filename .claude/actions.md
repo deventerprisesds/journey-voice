@@ -672,7 +672,8 @@ never removed; keep everything editable in Settings; shared category list "a go 
 | 5 | Owner go-ahead for Phase 1 ("go ahead and build phase 1 until done", 2026-11-04) | **given** | — |
 | 5a | Server/rules half: shared category list, keyword lane gate (scheduler + QC), resolveConfig fill, JOB/CAREER defaults, 13 keyword defaults → JOB, category AI guide (employer + name hints), write-path normalising, tool enums, migration | **implemented** on the branch; `npm test` 490/0; 9 mutations FIRED | d31aef1..52c759f; independent verifier running |
 | 5b | Screens: JOB on every list/style map, Job board tab before Career, Settings keyword lane dropdown | in progress (helper, own worktree, branch `claude_job-screens`) | — |
-| 5c | Huddle: JOB hue, label, order, Cole owns JOB, tool descriptions | in progress (helper) | — |
+| 5c | Huddle: JOB hue, label, order, Cole owns JOB, tool descriptions | **implemented, PR open** (tests green, tsc 0) | deventerpriseds-org/huddle-extension-app#130 |
+| 5f | Phone priorities widget lists JOB | **committed**; reaches the phone only on the next Android build | f5f17f9 |
 | 5d | Scorecard (27 titles on the live parser) | script + manual workflow committed; runs after deploy (session network cannot reach the project host) | `scripts/eval-job-category.mjs`, `.github/workflows/eval-job-category.yml` |
 | 5e | Data rollout (5 tasks, Company=Trinnex, saved JOB/CAREER rows, keyword relabel, name hints) | written, NOT run | `docs/qc-evidence/ROLLOUT-job-category.sql` |
 | 6 | Owner: "Work on my SDLC app" = JOB or VENTURES? | **ruled: JOB by default**; owner may re-file a single task by hand | owner 2026-11-03 |
