@@ -52,7 +52,7 @@ export function buildCategoryGuide(opts: {
   if (hints.length) {
     const byCat = new Map<TaskCategory, string[]>();
     for (const h of hints) byCat.set(h.category, [...(byCat.get(h.category) ?? []), h.name]);
-    lines.push('THE OWNER\'S NAME HINTS (a task naming one of these usually belongs to that category):');
+    lines.push('THE OWNER\'S NAME HINTS (a task naming one of these usually belongs to that category -- EXCEPT that rule 1 below always wins: SDLC / software-delivery work, ops decks and ops process diagrams are JOB even when they name one of these):');
     for (const k of CATEGORY_KEYS) {
       const names = byCat.get(k);
       if (names?.length) lines.push(`- ${k}: ${names.join(', ')}`);
