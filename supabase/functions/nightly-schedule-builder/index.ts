@@ -19,7 +19,7 @@ import {
 import { getTodayInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
 import { runWorkSessionPass } from "../_shared/work-session-pass.ts";
 import { activityBusySlots } from "../_shared/activities.ts";
-import { activeWindowNamesForDay, matchKeywordRule } from "../_shared/keyword-rules.ts";
+import { activeWindowNamesForDay, matchKeywordRule, categoryKeywordLimit } from "../_shared/keyword-rules.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -209,10 +209,12 @@ function getKeywordWindowOverride(
   contextKeywords: Record<string, string[]> | undefined,
   activeWindowNames: string[],
   category?: string,
+  categoryMappings?: Record<string, { defaultTimeWindow?: string[]; keywordsCanLeaveWindows?: boolean }>,
 ): { window: string; matchedKeyword: string } | null {
   // The rule lives in _shared/keyword-rules.ts so the daily review's QC check applies the SAME one.
   // A keyword whose lane is a category now steers only tasks in that category (owner 2026-11-03).
-  const m = matchKeywordRule(title, contextKeywords, { category, activeWindowNames });
+  // Rule 5: a category set to "keywords stay inside my windows" ignores keywords that point outside them.
+  const m = matchKeywordRule(title, contextKeywords, { category, activeWindowNames, ...categoryKeywordLimit(category, categoryMappings) });
   return m ? { window: m.window, matchedKeyword: m.keyword } : null;
 }
 
@@ -1218,7 +1220,7 @@ serve(async (req) => {
             }
 
             // KEYWORD OVERRIDE: contextRules.keywords beats category default.
-            const keywordOverride = getKeywordWindowOverride(task.title, contextKeywords, activeWindowNames, task.category);
+            const keywordOverride = getKeywordWindowOverride(task.title, contextKeywords, activeWindowNames, task.category, categoryMappings);
             let preferredWindows: string[];
             if (keywordOverride) {
               // Keyword window FIRST, then the category's own windows (see withKeywordWindow).

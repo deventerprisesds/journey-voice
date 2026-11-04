@@ -12,7 +12,7 @@ Last updated: 2026-10-27
 > distrust, never the sections. `actions.md` has no file-level stamp at all, deliberately, for
 > the same reason: its ACT entries each carry their own date.
 
-## Active work — JOB category, Phase 1 (2026-11-04, branch claude/jolly-archimedes-is9jyz, deventerprisesds/journey-voice#80, NOT merged)
+## JOB category, Phase 1 — SHIPPED 2026-11-04 (#80 + #86 merged, edge fns deployed, data applied; owner NOT yet confirmed in the app)
 Owner accepted a role at Trinnex. **JOB** = employer work (business hours by default); **CAREER** = next role
 (after work + weekends); client work and own apps = **VENTURES**; SDLC / ops decks / ops diagrams / Esri / Power BI =
 JOB. No employment start date (owner: "a moot point, stop applying that logic").
@@ -31,7 +31,7 @@ JOB. No employment start date (owner: "a moot point, stop applying that logic").
   `npm install --package-lock=false --ignore-scripts` for local typechecks, never commit the lock change.
 - Huddle side: deventerpriseds-org/huddle-extension-app#130 (hue 200, "Job" before Career, cole-blake owns JOB).
 - Phone widget list gains JOB in `public/bridge.config.json` (f5f17f9) — only reaches the phone on the next APK build.
-- Status: implemented + tests green; screens helper and independent verifier still running; nothing live.
+- Status: live. Scorecard 26/27 (E-21 SDLC+product name is 2/3). journey screens ship via Lovable — owner must hard-refresh to confirm.
 
 ## Activities — reserved time that is NOT a task (2026-10-29, MERGED #76 `ab9834b`, edge fns DEPLOYED; owner not yet confirmed live)
 

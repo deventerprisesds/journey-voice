@@ -586,6 +586,24 @@ const SchedulingSettings: React.FC = () => {
                       ℹ️ Tasks can be scheduled in any of these time windows
                     </p>
                   )}
+                  <div className="flex items-start gap-2 mt-2">
+                    <Checkbox
+                      id={`kw-leave-${category}`}
+                      checked={(mapping as any).keywordsCanLeaveWindows !== false}
+                      onCheckedChange={(v) =>
+                        setConfig({
+                          ...config,
+                          categoryMappings: {
+                            ...config.categoryMappings,
+                            [category]: { ...mapping, keywordsCanLeaveWindows: v === true },
+                          },
+                        })
+                      }
+                    />
+                    <Label htmlFor={`kw-leave-${category}`} className="text-xs font-normal leading-snug">
+                      Keywords may move these tasks outside these windows
+                    </Label>
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <Label className="text-sm">Board Lane</Label>

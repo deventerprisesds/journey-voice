@@ -46,7 +46,7 @@ export const CATEGORY_LABELS: Record<TaskCategory, string> = {
 /** One-line meaning of each category, used to brief the category AI. Owner rulings 2026-11-03. */
 export const CATEGORY_MEANINGS: Record<TaskCategory, string> = {
   LIFE: 'personal life: family, friends, health, fitness, errands, household, money, social',
-  JOB: 'work for the owner\'s employer: anything the employer pays for or expects, stated or implied (my manager, my team, standups, onboarding, timesheets, benefits, compliance training, the employer\'s tools, colleagues and clients). SDLC / software-delivery work, ops decks and ops process diagrams are JOB by default',
+  JOB: 'work for the owner\'s employer: anything the employer pays for or expects, stated or implied (my manager, my team, standups, onboarding, timesheets, benefits, compliance training, the employer\'s tools, colleagues and clients). SDLC / software-delivery work, ops decks and ops process diagrams are JOB by default, unless they name one of the owner\'s own products (then VENTURES)',
   CAREER: 'getting the NEXT role: job applications, interviews, recruiters, LinkedIn, résumé/CV, career coaching, career research',
   VENTURES: 'the owner\'s OWN products, businesses and clients: building, fixing, selling or supporting them',
   EDUCATION: 'self-paced learning with no institution deadlines: online courses, tutorials, certifications, reading',

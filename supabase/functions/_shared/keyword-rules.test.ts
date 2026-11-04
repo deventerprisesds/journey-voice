@@ -161,13 +161,51 @@ const QC_SRC = readFileSync(new URL('../../../src/utils/dailyReviewPipeline.ts',
 
 describe('both callers pass the task category into the shared rule', () => {
   it('W-1 the nightly scheduler passes task.category', () => {
-    assert.match(SCHEDULER_SRC, /getKeywordWindowOverride\(task\.title, contextKeywords, activeWindowNames, task\.category\)/);
-    assert.match(SCHEDULER_SRC, /matchKeywordRule\(title, contextKeywords, \{ category, activeWindowNames \}\)/);
+    // Rule 5 (2026-11-04) appended the category map; the category itself must still be passed.
+    assert.match(SCHEDULER_SRC, /getKeywordWindowOverride\(task\.title, contextKeywords, activeWindowNames, task\.category(, categoryMappings)?\)/);
+    assert.match(SCHEDULER_SRC, /matchKeywordRule\(title, contextKeywords, \{ category, activeWindowNames(, \.\.\.categoryKeywordLimit\(category, categoryMappings\))? \}\)/);
   });
   it('W-2 the daily QC check passes task.category and the shared open-window rule', () => {
     assert.match(QC_SRC, /matchKeywordRule\(task\.title, keywords, \{\s*category: task\.category,/);
     assert.match(QC_SRC, /return activeWindowNamesForDay\(timeWindows, day\);/);
     // ...and the call site actually passes it (verifier loop-2 G-1: dropping this argument left the suite green).
     assert.match(QC_SRC, /activeWindowNames: activeWindowNamesOn\(task\.start_time, tz, config\.timeWindows\),/);
+  });
+});
+
+// ── Rule 5 (owner 2026-11-04, option C): a category can keep keywords inside its own windows ─────────
+import { categoryKeywordLimit } from './keyword-rules.ts';
+
+describe('rule 5: keywordsCanLeaveWindows per category', () => {
+  const kw: Record<string, [string, string]> = { side: ['after_work', 'VENTURES'], study: ['evening', 'PROF_EDUCATION'] };
+  const cats = {
+    VENTURES: { defaultTimeWindow: ['evening', 'weekends'], keywordsCanLeaveWindows: false },
+    LIFE: { defaultTimeWindow: ['after_work'] }, // flag absent = keywords may leave (behaviour before)
+    ANY: { defaultTimeWindow: ['flexible'], keywordsCanLeaveWindows: false },
+  };
+  const run = (title: string, category: string, keywords: Record<string, [string, string]> = kw) =>
+    matchKeywordRule(title, keywords, { category, activeWindowNames: WEEKDAY, ...categoryKeywordLimit(category, cats) })?.window ?? 'none';
+
+  it('R5-1 flag false: a keyword pointing OUTSIDE the category windows is ignored (Ventures stays evening/weekends)', () => {
+    assert.equal(run('Build the side project', 'VENTURES'), 'none');
+  });
+  it('R5-2 flag false: a keyword pointing INSIDE the category windows still applies', () => {
+    assert.equal(run('Build the side project', 'VENTURES', { side: ['evening', 'VENTURES'] }), 'evening');
+  });
+  it('R5-3 flag absent: keywords may still move a task outside its windows (exercise -> morning on LIFE)', () => {
+    assert.equal(run('Morning exercise', 'LIFE', { exercise: ['morning', 'LIFE'] }), 'morning');
+  });
+  it('R5-4 a flexible category has no window limit even with the flag off', () => {
+    assert.equal(run('Build the side project', 'ANY', { side: ['after_work', ''] }), 'after_work');
+  });
+  it('R5-5 unknown category / no map = not limited (callers that never knew the category behave as before)', () => {
+    assert.deepEqual(categoryKeywordLimit('NOPE', cats), { keywordsCanLeaveWindows: true });
+    assert.deepEqual(categoryKeywordLimit('VENTURES', null), { keywordsCanLeaveWindows: true });
+  });
+  it('R5-6 both consumers pass the category limit (scheduler and daily QC use the same rule)', () => {
+    const builder = readFileSync(new URL('../nightly-schedule-builder/index.ts', import.meta.url), 'utf8');
+    assert.match(builder, /\.\.\.categoryKeywordLimit\(category, categoryMappings\)/);
+    assert.match(builder, /getKeywordWindowOverride\(task\.title, contextKeywords, activeWindowNames, task\.category, categoryMappings\)/);
+    assert.match(QC_SRC, /\.\.\.categoryKeywordLimit\(task\.category, \(config as any\)\.categoryMappings\),/);
   });
 });
