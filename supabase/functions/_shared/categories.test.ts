@@ -7,7 +7,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { CATEGORY_KEYS, CATEGORY_LABELS, normalizeCategory, toCategoryKey, laneCoversCategory } from './categories.ts';
+import { CATEGORY_KEYS, CATEGORY_LABELS, normalizeCategory, recognizeCategory, toCategoryKey, laneCoversCategory } from './categories.ts';
 
 describe('CATEGORY_KEYS', () => {
   it('C-1 holds every value of the task_category enum plus JOB, JOB directly before CAREER', () => {
@@ -66,5 +66,17 @@ describe('toCategoryKey / laneCoversCategory', () => {
     assert.equal(laneCoversCategory('LIFE', 'JOB'), false);
     assert.equal(laneCoversCategory('JOB', 'CAREER'), false);
     assert.equal(laneCoversCategory('EDUCATION', 'PROF_EDUCATION'), false);
+  });
+});
+
+describe('recognizeCategory (UPDATE paths keep the current category on an unrecognised value)', () => {
+  it('R-1 unrecognised values are null, never LIFE', () => {
+    for (const v of ['FAMILY', 'Office', 'GARDENING', '', undefined]) assert.equal(recognizeCategory(v), null, String(v));
+  });
+  it('R-2 recognised values match normalizeCategory', () => {
+    for (const v of ['JOB', 'work', 'Employment', 'job search', 'startup', 'homework']) {
+      assert.equal(recognizeCategory(v), normalizeCategory(v), v);
+    }
+    assert.equal(recognizeCategory('Employment'), 'JOB');
   });
 });

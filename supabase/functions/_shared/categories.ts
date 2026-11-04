@@ -85,9 +85,18 @@ export function isCategory(raw: unknown): raw is TaskCategory {
  * Anything unrecognised is LIFE, exactly as before.
  */
 export function normalizeCategory(raw: unknown): TaskCategory {
+  return recognizeCategory(raw) ?? 'LIFE';
+}
+
+/**
+ * The category a free-form string clearly means, or null when it means none of them. Use this where a wrong
+ * guess would overwrite good data: an UPDATE with an unrecognised category must keep the task's current
+ * category, not re-file it as LIFE.
+ */
+export function recognizeCategory(raw: unknown): TaskCategory | null {
   const exact = toCategoryKey(raw);
   if (exact) return exact;
-  if (typeof raw !== 'string' || raw.trim() === '') return 'LIFE';
+  if (typeof raw !== 'string' || raw.trim() === '') return null;
   const c = raw.toLowerCase().replace(/[_\s-]+/g, '');
 
   if (c.includes('jobsearch') || c.includes('jobhunt')) return 'CAREER';
@@ -102,11 +111,11 @@ export function normalizeCategory(raw: unknown): TaskCategory {
   if (c.includes('career') || c.includes('network')) return 'CAREER';
   // Whole words only, so "workout" and "networking" are not JOB.
   const words = raw.toLowerCase().split(/[^a-z]+/);
-  if (words.some((w) => w === 'work' || w === 'job' || w === 'jobs' || w === 'employer')) return 'JOB';
+  if (words.some((w) => w === 'work' || w === 'job' || w === 'jobs' || w === 'employer' || w === 'employment')) return 'JOB';
 
   if (c.includes('venture') || c.includes('startup') || c.includes('business')) return 'VENTURES';
 
-  return 'LIFE';
+  return null;
 }
 
 /**

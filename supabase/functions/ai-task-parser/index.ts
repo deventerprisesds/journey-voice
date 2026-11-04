@@ -104,10 +104,13 @@ serve(async (req) => {
     let categoryHints: ReturnType<typeof categoryHintsFromKeywords> = [];
     if (userId) {
       try {
-        const [{ data: profile }, { data: prefs }] = await Promise.all([
+        const [{ data: profile, error: profileErr }, { data: prefs, error: prefsErr }] = await Promise.all([
           supabaseAdmin.from('profiles').select('company').eq('user_id', userId).maybeSingle(),
           supabaseAdmin.from('user_scheduling_prefs').select('config').eq('user_id', userId).maybeSingle(),
         ]);
+        if (profileErr || prefsErr) {
+          console.warn('⚠️ Category context read failed; parsing without it:', profileErr?.message, prefsErr?.message);
+        }
         employer = (profile as any)?.company ?? null;
         categoryHints = categoryHintsFromKeywords((prefs as any)?.config?.contextRules?.keywords);
       } catch (e) {
