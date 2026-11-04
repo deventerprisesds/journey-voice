@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
 import { activityBusySlots, resolveActivities, normalizeActivity, matchActivity, planPush, toMinutes, minutesToHHMM, parseClockTime, type PushItem } from "../_shared/activities.ts";
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
-import { normalizeCategory, recognizeCategory } from "../_shared/categories.ts";
+import { CATEGORY_KEYS, normalizeCategory, recognizeCategory } from "../_shared/categories.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, activeCaveats } from "../_shared/scheduling-defaults.ts";
 import { runDedup, finalizeDedup, undoDedupSkips, type DedupLogEntry } from "../_shared/task-dedup.ts";
@@ -1013,7 +1013,9 @@ async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse
     // Guard the empty-update case cleanly instead of letting `.update({})…single()` surface the
     // opaque coerce error (an unmapped-only args set would otherwise repeat the bug above).
     if (!Object.keys(updateData).length) {
-      return { success: false, error: "No updatable fields provided" };
+      return { success: false, error: categoryKept
+        ? `"${categoryKept}" is not a category (use one of: ${CATEGORY_KEYS.join(', ')}); the task was not changed`
+        : "No updatable fields provided" };
     }
 
     const { data, error } = await supabase
