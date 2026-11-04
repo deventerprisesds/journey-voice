@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import { cn } from '@/lib/utils';
-import { Task } from '@/types/task';
+import { Task, TaskCategory } from '@/types/task';
 
 interface FilterState {
   search: string;
@@ -62,8 +62,10 @@ const priorityOptions = [
   { value: 'URGENT', label: 'Urgent', color: 'bg-red-100 text-red-700' },
 ];
 
-const categoryOptions = [
+// Values typed by the shared category list. Labels/colours are this screen's own (unchanged).
+const categoryOptions: { value: TaskCategory; label: string; color: string }[] = [
   { value: 'LIFE', label: 'Life', color: 'bg-green-100 text-green-700' },
+  { value: 'JOB', label: 'Job', color: 'bg-lime-100 text-lime-700' },
   { value: 'CAREER', label: 'Career', color: 'bg-blue-100 text-blue-700' },
   { value: 'VENTURES', label: 'Ventures', color: 'bg-purple-100 text-purple-700' },
   { value: 'EDUCATION', label: 'Education', color: 'bg-orange-100 text-orange-700' },

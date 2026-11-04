@@ -1,10 +1,14 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone } from "../_shared/timezone.ts";
+import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
+import { activityBusySlots, resolveActivities, normalizeActivity, matchActivity, planPush, toMinutes, minutesToHHMM, parseClockTime, type PushItem } from "../_shared/activities.ts";
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
+import { CATEGORY_KEYS, normalizeCategory, recognizeCategory } from "../_shared/categories.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, activeCaveats } from "../_shared/scheduling-defaults.ts";
 import { mintCaller } from "../_shared/push-auth.ts";
+import { runDedup, finalizeDedup, undoDedupSkips, type DedupLogEntry } from "../_shared/task-dedup.ts";
+import { updateCalendarEvent, deleteCalendarEvent, makeSupabaseCalendarEditDeps } from "../_shared/calendar-edit.ts";
 
 // ── Rollback Flag for shared topic ranking ──────────────────────────
 const USE_SHARED_TOPICS = true;
@@ -345,20 +349,31 @@ async function executeToolCall(
           auto_schedule: true
         }, context?.timezone);
       
+      // Every single-task mutation below is scoped to the CALLER (`.eq('user_id', userId)`), the same
+      // way delete_task / batch_update_tasks already were: an id alone must never reach another
+      // user's row. A non-matching id returns "Task not found". Pinned by
+      // execute-tool/task-scope.test.ts.
       case 'update_task':
-        return await updateTask(supabase, args);
+        return await updateTask(supabase, userId, args);
+
+      // Internal: the owner deleting one of their OWN tasks from Huddle's board (a card's "Delete"
+      // action, behind a confirm). Same effect as journey's own TaskDetailModal delete; the
+      // notify_huddle_task_sync trigger then removes the Huddle mirror row. Scoped to userId so a
+      // caller can only ever delete their own row. Not advertised to LLMs — agents never delete.
+      case 'delete_task':
+        return await deleteTask(supabase, userId, args);
 
       case 'batch_update_tasks':
         return await batchUpdateTasks(supabase, userId, args);
 
       case 'reschedule_task':
-        return await rescheduleTask(supabase, args);
-      
+        return await rescheduleTask(supabase, userId, args);
+
       case 'schedule_task':
-        return await scheduleTask(supabase, args);
-      
+        return await scheduleTask(supabase, userId, args);
+
       case 'unschedule_task':
-        return await unscheduleTask(supabase, args);
+        return await unscheduleTask(supabase, userId, args);
 
       case 'set_scheduling_caveat':
         return await setSchedulingCaveat(supabase, userId, args);
@@ -366,9 +381,27 @@ async function executeToolCall(
         return await listSchedulingCaveats(supabase, userId);
       case 'clear_scheduling_caveat':
         return await clearSchedulingCaveat(supabase, userId, args);
+
+      case 'add_activity':
+        return await addActivity(supabase, userId, args);
+      case 'list_activities':
+        return await listActivities(supabase, userId);
+      case 'update_activity':
+        return await updateActivity(supabase, userId, args);
+      case 'remove_activity':
+        return await removeActivity(supabase, userId, args);
+      case 'skip_activity':
+        return await skipActivity(supabase, userId, args);
+      case 'start_activity':
+        return await startActivity(supabase, userId, args);
+      case 'undo_activity_start':
+        return await undoActivityStart(supabase, userId);
       
       case 'parse_and_create_tasks':
         return await parseAndCreateTasks(supabase, userId, args, context?.timezone);
+
+      case 'undo_dedup':
+        return await undoDedup(supabase, userId, args);
 
       // ============ COMMUNICATION TOOLS ============
       case 'send_email':
@@ -389,6 +422,14 @@ async function executeToolCall(
       
       case 'create_calendar_event':
         return await createCalendarEvent(supabase, userId, args, context.userProfile);
+
+      case 'update_calendar_event':
+        return calendarEditResponse(await updateCalendarEvent(
+          makeSupabaseCalendarEditDeps(supabase, (k) => Deno.env.get(k), fetch), userId, args ?? {}));
+
+      case 'delete_calendar_event':
+        return calendarEditResponse(await deleteCalendarEvent(
+          makeSupabaseCalendarEditDeps(supabase, (k) => Deno.env.get(k), fetch), userId, args ?? {}));
       
       case 'initiate_phone_call':
       case 'Phone_Call':
@@ -437,10 +478,10 @@ async function executeToolCall(
         return await moveTaskToDay(supabase, userId, args, context.timezone);
 
       case 'swap_task_order':
-        return await swapTaskOrder(supabase, args);
+        return await swapTaskOrder(supabase, userId, args);
 
       case 'set_priority_rank':
-        return await setPriorityRank(supabase, args);
+        return await setPriorityRank(supabase, userId, args);
 
       case 'quick_create_task':
         return await quickCreateTask(supabase, userId, args, context.timezone);
@@ -878,15 +919,34 @@ async function createTask(supabase: any, userId: string, args: any): Promise<Exe
 
     if (!board) return { success: false, error: "No board found for user" };
 
-    const taskData = {
+    const taskData: any = {
       title: args.title,
       description: args.description || null,
       priority: args.priority?.toUpperCase() || 'MEDIUM',
-      category: args.category?.toUpperCase() || 'LIFE',
+      category: normalizeCategory(args.category),
       status: 'BACKLOG',
       board_id: board.id,
       user_id: userId
     };
+
+    // Creation-time dedup guard (no-op unless config.dedup.enabled). Single-candidate batch.
+    const dedup = await runDedup({ supabase, userId, candidates: [taskData.title] });
+    const outcome = dedup.outcomes[0];
+    if (dedup.enabled && outcome && !outcome.create) {
+      const d = outcome.decision;
+      await finalizeDedup(supabase, { userId, boardId: board.id, source: 'create_task', entries: [{
+        action: 'skipped', candidate: taskData, matched_task_id: d.matchedTaskId,
+        matched_title: d.matchedTitle, method: d.method, similarity: d.similarity,
+      }] });
+      return {
+        success: true,
+        result: { task: null, skipped: true, duplicateOf: d.matchedTitle },
+        message: `Skipped creating "${taskData.title}" — it looks like a duplicate of "${d.matchedTitle}". Undo from your task history if that's wrong.`
+      };
+    }
+    if (dedup.enabled && outcome && outcome.extraTags.length) {
+      taskData.tags = Array.from(new Set([...(taskData.tags || []), ...outcome.extraTags]));
+    }
 
     const { data, error } = await supabase
       .from('tasks')
@@ -896,8 +956,17 @@ async function createTask(supabase: any, userId: string, args: any): Promise<Exe
 
     if (error) throw error;
 
-    return { 
-      success: true, 
+    if (dedup.enabled && outcome && outcome.extraTags.length) {
+      const d = outcome.decision;
+      await finalizeDedup(supabase, { userId, boardId: board.id, source: 'create_task', entries: [{
+        action: 'flagged', candidate: taskData, matched_task_id: d.matchedTaskId,
+        matched_title: d.matchedTitle, method: d.method, similarity: d.similarity,
+        created_task_id: data.id,
+      }] });
+    }
+
+    return {
+      success: true,
       result: { task: data },
       message: `Created task "${data.title}" with ${data.priority} priority`
     };
@@ -906,7 +975,24 @@ async function createTask(supabase: any, userId: string, args: any): Promise<Exe
   }
 }
 
-async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse> {
+async function deleteTask(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  if (!args.task_id) return { success: false, error: "Task ID is required" };
+  try {
+    const { data, error } = await supabase
+      .from('tasks')
+      .delete()
+      .eq('id', String(args.task_id))
+      .eq('user_id', userId)
+      .select('id, title');
+    if (error) throw error;
+    if (!data || data.length === 0) return { success: false, error: "Task not found" };
+    return { success: true, message: `Deleted task: ${data[0].title}`, data: { id: data[0].id, title: data[0].title } };
+  } catch (error: any) {
+    return { success: false, error: `Failed to delete task: ${error.message}` };
+  }
+}
+
+async function updateTask(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   if (!args.task_id) return { success: false, error: "Task ID is required" };
 
   try {
@@ -915,7 +1001,13 @@ async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse
     if (args.description !== undefined) updateData.description = args.description;
     if (args.status) updateData.status = args.status.toUpperCase();
     if (args.priority) updateData.priority = args.priority.toUpperCase();
-    if (args.category) updateData.category = args.category.toUpperCase();
+    let categoryKept: string | null = null;
+    if (args.category) {
+      // An unrecognised category keeps the task's current one (it used to fail on the enum and change nothing).
+      const cat = recognizeCategory(args.category);
+      if (cat) updateData.category = cat;
+      else { categoryKept = String(args.category); console.warn(`[UPDATE_TASK] category "${categoryKept}" is not a category; kept the current one`); }
+    }
     // Huddle scrum-master grooming: assign the task to a specific agent + apply labels.
     // assigned_agent is a Huddle agent id (e.g. "finn-reid"); pass null/"" to clear.
     if (args.assigned_agent !== undefined) {
@@ -935,30 +1027,34 @@ async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse
     // Guard the empty-update case cleanly instead of letting `.update({})…single()` surface the
     // opaque coerce error (an unmapped-only args set would otherwise repeat the bug above).
     if (!Object.keys(updateData).length) {
-      return { success: false, error: "No updatable fields provided" };
+      return { success: false, error: categoryKept
+        ? `"${categoryKept}" is not a category (use one of: ${CATEGORY_KEYS.join(', ')}); the task was not changed`
+        : "No updatable fields provided" };
     }
 
     const { data, error } = await supabase
       .from('tasks')
       .update(updateData)
       .eq('id', args.task_id)
+      .eq('user_id', userId)
       .select()
       .maybeSingle();
 
     if (error) throw error;
     if (!data) {
-      // No row matched this id. Surface WHICH id failed instead of PostgREST's opaque "Cannot coerce
-      // the result to a single JSON object" that .single() raises on 0 rows — that message hid a
-      // stale/incorrect task_id (e.g. a caller passing an id that isn't in public.tasks) and made the
-      // failure look like an unrelated parsing bug. Service-role client, so this is a true not-found,
-      // not an RLS filter.
-      return { success: false, error: `No task matched id ${args.task_id} (0 rows updated)` };
+      // No row matched this id FOR THIS CALLER (unknown id, or another user's task -- the two are
+      // deliberately indistinguishable). Surface WHICH id failed instead of PostgREST's opaque
+      // "Cannot coerce the result to a single JSON object" that .single() raises on 0 rows -- that
+      // message hid a stale/incorrect task_id and made the failure look like a parsing bug.
+      return { success: false, error: `Task not found: no task matched id ${args.task_id} (0 rows updated)` };
     }
 
     return {
       success: true,
-      result: { task: data },
-      message: `Updated task "${data.title}"`
+      result: { task: data, ...(categoryKept ? { category_not_changed: categoryKept } : {}) },
+      message: categoryKept
+        ? `Updated task "${data.title}" (category "${categoryKept}" is not a category, so it stays ${data.category})`
+        : `Updated task "${data.title}"`
     };
   } catch (error) {
     return { success: false, error: extractErrorMessage(error) };
@@ -981,7 +1077,11 @@ async function batchUpdateTasks(supabase: any, userId: string, args: any): Promi
     if (u.description !== undefined) data.description = u.description;
     if (u.status) data.status = String(u.status).toUpperCase();
     if (u.priority) data.priority = String(u.priority).toUpperCase();
-    if (u.category) data.category = String(u.category).toUpperCase();
+    if (u.category) {
+      const cat = recognizeCategory(u.category);
+      if (cat) data.category = cat;
+      else console.warn(`[BATCH_UPDATE] category "${u.category}" is not a category; kept the current one`);
+    }
     if (u.assigned_agent !== undefined) data.assigned_agent = u.assigned_agent ? String(u.assigned_agent) : null;
     if (u.tags !== undefined) data.tags = Array.isArray(u.tags) ? u.tags.map((t: unknown) => String(t)) : [];
     if (u.definition_of_done !== undefined) data.definition_of_done = u.definition_of_done ? String(u.definition_of_done) : null;
@@ -1003,7 +1103,7 @@ async function batchUpdateTasks(supabase: any, userId: string, args: any): Promi
   };
 }
 
-async function rescheduleTask(supabase: any, args: any, timezone?: string): Promise<ExecuteToolResponse> {
+async function rescheduleTask(supabase: any, userId: string, args: any, timezone?: string): Promise<ExecuteToolResponse> {
   if (!args.task_id) return { success: false, error: "Task ID is required" };
   if (!args.new_date) return { success: false, error: "New date is required" };
 
@@ -1033,6 +1133,7 @@ async function rescheduleTask(supabase: any, args: any, timezone?: string): Prom
           .from('tasks')
           .select('category')
           .eq('id', args.task_id)
+          .eq('user_id', userId)
           .single();
         const taskCategory = taskData?.category || 'LIFE';
 
@@ -1075,13 +1176,15 @@ async function rescheduleTask(supabase: any, args: any, timezone?: string): Prom
       .from('tasks')
       .update(updateData)
       .eq('id', args.task_id)
+      .eq('user_id', userId)
       .select()
-      .single();
+      .maybeSingle();
 
     if (error) throw error;
+    if (!data) return { success: false, error: "Task not found" };
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       result: { task: data },
       message: `Rescheduled "${data.title}" to ${normalizedStartTime}`
     };
@@ -1090,7 +1193,7 @@ async function rescheduleTask(supabase: any, args: any, timezone?: string): Prom
   }
 }
 
-async function scheduleTask(supabase: any, args: any, timezone?: string): Promise<ExecuteToolResponse> {
+async function scheduleTask(supabase: any, userId: string, args: any, timezone?: string): Promise<ExecuteToolResponse> {
   if (!args.task_id) return { success: false, error: "Task ID is required" };
 
   const tz = timezone || 'America/New_York';
@@ -1104,11 +1207,13 @@ async function scheduleTask(supabase: any, args: any, timezone?: string): Promis
       .from('tasks')
       .select('id, title, start_time, end_time, is_scheduled')
       .eq('id', args.task_id)
-      .single();
-    
+      .eq('user_id', userId)
+      .maybeSingle();
+
     if (fetchError) {
       return { success: false, error: `Task not found: ${fetchError.message}` };
     }
+    if (!existingTask) return { success: false, error: "Task not found" };
     
     if (existingTask?.is_scheduled && existingTask?.start_time) {
       console.warn(`[SCHEDULE_TASK] ⚠️ SKIPPED: Task "${existingTask.title}" already scheduled at ${existingTask.start_time}`);
@@ -1193,13 +1298,15 @@ async function scheduleTask(supabase: any, args: any, timezone?: string): Promis
       .from('tasks')
       .update(updateData)
       .eq('id', args.task_id)
+      .eq('user_id', userId)
       .select()
-      .single();
+      .maybeSingle();
 
     if (error) throw error;
+    if (!data) return { success: false, error: "Task not found" };
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       result: { task: data },
       message: `Scheduled "${data.title}" for ${normalizedStartTime}`
     };
@@ -1218,8 +1325,11 @@ async function scheduleTask(supabase: any, args: any, timezone?: string): Promis
 const CAVEAT_WINDOWS = ['morning', 'business_hours', 'after_work', 'evening', 'flexible', 'weekends'];
 
 async function readCaveats(supabase: any, userId: string): Promise<{ config: any; caveats: any[] }> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('user_scheduling_prefs').select('config').eq('user_id', userId).maybeSingle();
+  // Same rule as readActivityPrefs: writeCaveats saves `{...config, caveats}`, so continuing with {}
+  // after a failed read would erase timeWindows, categoryMappings and activities. Refuse instead.
+  if (error) throw new Error(`Could not read scheduling settings, so nothing was changed: ${error.message}`);
   const config = data?.config ?? {};
   return { config, caveats: Array.isArray(config.caveats) ? config.caveats : [] };
 }
@@ -1310,7 +1420,289 @@ async function clearSchedulingCaveat(supabase: any, userId: string, args: any): 
   }
 }
 
-async function unscheduleTask(supabase: any, args: any): Promise<ExecuteToolResponse> {
+// ============================================================================
+// ACTIVITIES — recurring/one-off/on-demand blocks of the owner's time (lunch, gym, church, haircut,
+// 1:1s) that are NOT tasks. Stored in user_scheduling_prefs.config.activities and expanded at read
+// time by _shared/activities.ts, which every scheduler uses as busy time.
+// ============================================================================
+
+async function readActivityPrefs(supabase: any, userId: string): Promise<{ config: any; timezone: string; activities: any[] }> {
+  const { data, error } = await supabase
+    .from('user_scheduling_prefs').select('config, timezone').eq('user_id', userId).maybeSingle();
+  // A failed read must NEVER continue with {}: every write below saves the config plus activities, so
+  // an empty config would erase timeWindows, categoryMappings, caveats and contextRules — the
+  // 2026-09-13 wipe that mergeStoredConfig exists to prevent on the client. Refuse instead.
+  if (error) throw new Error(`Could not read scheduling settings, so nothing was changed: ${error.message}`);
+  const config = data?.config ?? {};
+  return { config, timezone: data?.timezone || config.timezone || 'America/New_York', activities: resolveActivities(config) };
+}
+
+async function writeActivityConfig(supabase: any, userId: string, config: any, activities: any[], timezone: string, extra: Record<string, unknown> = {}) {
+  // One-off activities whose date has passed are dropped on every write, so the list cannot grow
+  // forever. "Past" is judged in the owner's RESOLVED timezone (the column first) — config.timezone
+  // is often absent, and a New York fallback deletes a Los Angeles owner's evening block the
+  // moment it is written.
+  const today = getTodayInTimezone(timezone);
+  const kept = activities.filter((a: any) => !(a.kind === 'one_off' && typeof a.date === 'string' && a.date < today));
+  const next = { ...config, activities: kept, ...extra };
+  const { error } = await supabase
+    .from('user_scheduling_prefs')
+    .upsert({ user_id: userId, config: next }, { onConflict: 'user_id' });
+  if (error) throw error;
+}
+
+/** Resolve an activity by id or by name/alias the owner used. */
+function findActivity(activities: any[], args: any): any | null {
+  if (args?.activity_id) return activities.find((a: any) => a.id === args.activity_id) ?? null;
+  const name = String(args?.name ?? args?.activity ?? '').trim();
+  if (!name) return null;
+  return activities.find((a: any) => a.name.toLowerCase() === name.toLowerCase()) ?? matchActivity(activities, name);
+}
+
+function describeActivity(a: any): string {
+  const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  if (a.kind === 'on_demand') return `${a.name} (on demand, ${a.durationMin} min${a.pushesSchedule ? ', pushes your day' : ''})`;
+  const when = a.kind === 'one_off' ? a.date : `${(a.days || []).map((d: number) => DOW[d]).join('/')}${a.everyNWeeks > 1 ? ` every ${a.everyNWeeks} weeks` : ''}`;
+  const time = a.mode === 'floating' ? `around ${a.start} (${a.earliest}-${a.latest})` : `at ${a.start}`;
+  return `${a.name} ${when} ${time}, ${a.durationMin} min${a.enabled === false ? ' [paused]' : ''}`;
+}
+
+async function addActivity(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    const { config, timezone, activities } = await readActivityPrefs(supabase, userId);
+    const { activity, error } = normalizeActivity(args);
+    if (!activity) return { success: false, error: error || 'invalid activity' };
+    const clash = activities.find((a: any) => a.name.toLowerCase() === activity.name.toLowerCase());
+    if (clash) return { success: false, error: `You already have an activity called "${clash.name}" (${describeActivity(clash)}). Use update_activity to change it.` };
+    await writeActivityConfig(supabase, userId, config, [...activities, activity], timezone);
+    return {
+      success: true,
+      result: { activity },
+      message: `Added ${describeActivity(activity)}. It is reserved time — tasks will be scheduled around it, and it will not appear on your task board.`,
+    };
+  } catch (e) {
+    return { success: false, error: extractErrorMessage(e) };
+  }
+}
+
+async function listActivities(supabase: any, userId: string): Promise<ExecuteToolResponse> {
+  try {
+    const { activities } = await readActivityPrefs(supabase, userId);
+    return {
+      success: true,
+      result: { activities },
+      message: activities.length ? activities.map(describeActivity).join('\n') : 'No activities are set up.',
+    };
+  } catch (e) {
+    return { success: false, error: extractErrorMessage(e) };
+  }
+}
+
+async function updateActivity(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    const { config, timezone, activities } = await readActivityPrefs(supabase, userId);
+    const current = findActivity(activities, args);
+    if (!current) return { success: false, error: 'No matching activity. Call list_activities to see what exists.' };
+    // Merge the change over the stored activity, then re-validate the whole thing.
+    const merged = { ...current };
+    for (const [k, v] of Object.entries(args || {})) {
+      if (v === undefined || k === 'activity_id' || k === 'activity') continue;
+      if (k === 'new_name') { merged.name = v; continue; }
+      if (k === 'name') continue; // `name` identifies the activity; renaming uses new_name
+      merged[k] = v;
+    }
+    // Moving a flexible activity's preferred start without naming a new range moves the range with
+    // it ("lunch at 1 instead") — otherwise the old 11:30-13:30 range would be kept and the block
+    // would sit outside its own range.
+    if (current.mode === 'floating' && typeof args?.start === 'string' && current.start
+        && args.earliest === undefined && args.latest === undefined && parseClockTime(args.start)) {
+      const delta = toMinutes(parseClockTime(args.start)!) - toMinutes(current.start);
+      const shift = (t?: string) => (t ? minutesToHHMM(Math.min(23 * 60 + 59, Math.max(0, toMinutes(t) + delta))) : t);
+      merged.earliest = shift(current.earliest);
+      merged.latest = shift(current.latest);
+    }
+    const { activity, error } = normalizeActivity({ ...merged, id: current.id, createdAt: current.createdAt });
+    if (!activity) return { success: false, error: error || 'invalid activity' };
+    await writeActivityConfig(supabase, userId, config, activities.map((a: any) => (a.id === current.id ? activity : a)), timezone);
+    return { success: true, result: { activity }, message: `Updated: ${describeActivity(activity)}.` };
+  } catch (e) {
+    return { success: false, error: extractErrorMessage(e) };
+  }
+}
+
+async function removeActivity(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    const { config, timezone, activities } = await readActivityPrefs(supabase, userId);
+    const current = findActivity(activities, args);
+    if (!current) return { success: false, error: 'No matching activity. Call list_activities to see what exists.' };
+    await writeActivityConfig(supabase, userId, config, activities.filter((a: any) => a.id !== current.id), timezone);
+    return { success: true, result: { removed: current }, message: `Removed ${current.name}. That time is open for tasks again from the next scheduling pass.` };
+  } catch (e) {
+    return { success: false, error: extractErrorMessage(e) };
+  }
+}
+
+async function skipActivity(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    const { config, timezone, activities } = await readActivityPrefs(supabase, userId);
+    const current = findActivity(activities, args);
+    if (!current) return { success: false, error: 'No matching activity. Call list_activities to see what exists.' };
+    const date = typeof args?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.date) ? args.date : getTodayInTimezone(timezone);
+    const skipDates = [...new Set([...(current.skipDates || []), date])].filter((d: string) => d >= getTodayInTimezone(timezone));
+    await writeActivityConfig(supabase, userId, config, activities.map((a: any) => (a.id === current.id ? { ...a, skipDates } : a)), timezone);
+    return { success: true, result: { activity_id: current.id, date }, message: `Skipping ${current.name} on ${date}. That time is open for tasks.` };
+  } catch (e) {
+    return { success: false, error: extractErrorMessage(e) };
+  }
+}
+
+/**
+ * "I'm headed to the gym": reserve the activity starting now (or at start_time) and push everything it
+ * displaces later in the day, in order. Meetings and locked activities never move — overlaps with them
+ * are returned as conflicts for the agent to raise. Work that no longer fits its window today is
+ * unscheduled so the next build re-places it. The previous times are saved so undo_activity_start can
+ * restore the day exactly.
+ */
+async function startActivity(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    const { config, timezone: tz, activities } = await readActivityPrefs(supabase, userId);
+    const base = findActivity(activities, args);
+    const name = base?.name || String(args?.name ?? args?.activity ?? '').trim();
+    if (!name) return { success: false, error: 'Which activity? Pass name (e.g. "gym").' };
+    const durationMin = Math.round(Number(args?.duration_min ?? base?.durationMin ?? 60));
+    if (!(durationMin >= 5 && durationMin <= 720)) return { success: false, error: 'duration must be between 5 and 720 minutes' };
+
+    const today = getTodayInTimezone(tz);
+    let startHHMM: string;
+    if (args?.start_time !== undefined && args?.start_time !== null && args?.start_time !== '') {
+      // Accept 9:30 / 09:30 / 09:30:00; anything else is an error, never a silent "now".
+      const parsed = parseClockTime(args.start_time);
+      if (!parsed) return { success: false, error: `start_time must be HH:mm (24-hour), got "${args.start_time}"` };
+      startHHMM = parsed;
+    } else {
+      // Now, rounded down to 5 minutes, in the owner's timezone.
+      const parts = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date());
+      const h = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
+      const m = Number(parts.find((p) => p.type === 'minute')?.value ?? 0);
+      startHHMM = `${String(h).padStart(2, '0')}:${String(m - (m % 5)).padStart(2, '0')}`;
+    }
+    const instance = {
+      id: `adhoc_${(base?.id || name.toLowerCase().replace(/[^a-z0-9]+/g, '_'))}_${today}_${startHHMM.replace(':', '')}`,
+      name, kind: 'one_off', mode: 'locked', date: today, start: startHHMM, durationMin,
+      aliases: base?.aliases, enabled: true, createdAt: new Date().toISOString(), adHocOf: base?.id ?? null,
+    };
+    const blockStartMs = new Date(normalizeDateTime(`${today}T${startHHMM}`, tz)!).getTime();
+    const blockEndMs = blockStartMs + durationMin * 60000;
+
+    const bounds = localDateToUtcBounds(today, tz);
+    const [tasksRes, eventsRes] = await Promise.all([
+      supabase.from('tasks').select('id, title, start_time, end_time, category, status')
+        .eq('user_id', userId).eq('is_scheduled', true).neq('status', 'DONE')
+        .gte('start_time', bounds.start).lt('start_time', bounds.end),
+      supabase.from('external_calendar_events').select('id, title, start_time, end_time')
+        .eq('user_id', userId).eq('is_all_day', false)
+        .gte('end_time', bounds.start).lt('start_time', bounds.end),
+    ]);
+    // A failed read here would plan the push against an empty day and move tasks blind. Refuse.
+    if (tasksRes.error) throw new Error(`Could not read today's tasks, so nothing was moved: ${tasksRes.error.message}`);
+    if (eventsRes.error) throw new Error(`Could not read today's calendar, so nothing was moved: ${eventsRes.error.message}`);
+    const events = eventsRes.data || [];
+    // Today's activity blocks WITH the new one included, so floating ones (lunch) already slide around it.
+    const withInstance = [...activities, instance];
+    const blocks = activityBusySlots({ ...config, activities: withInstance }, bounds.start, bounds.end, tz, events)
+      .filter((b) => b.activityId !== instance.id);
+
+    // A task may run until the end of the latest window its category allows today (else 22:00).
+    const { timeWindows, categoryMappings } = resolveConfig(config);
+    const dow = new Date(`${today}T12:00:00Z`).getUTCDay();
+    const limitFor = (category: string | null): number => {
+      const listed: string[] = categoryMappings?.[category || '']?.defaultTimeWindow || ['flexible'];
+      const ends = listed
+        .map((w) => (w === 'flexible' ? timeWindows.flexible : timeWindows[w]))
+        .filter((w: any) => w && (!w.days || w.days.includes(dow)))
+        .map((w: any) => w.end);
+      const endHour = ends.length ? Math.max(...ends) : 22;
+      return new Date(normalizeDateTime(`${today}T${String(endHour).padStart(2, '0')}:00`, tz)!).getTime();
+    };
+
+    const items: PushItem[] = [
+      ...(tasksRes.data || []).filter((t: any) => t.start_time && t.end_time).map((t: any) => ({
+        id: t.id, title: t.title, kind: 'task' as const, movable: true,
+        startMs: new Date(t.start_time).getTime(), endMs: new Date(t.end_time).getTime(), limitMs: limitFor(t.category),
+      })),
+      ...events.map((e: any) => ({
+        id: e.id, title: e.title || 'Calendar event', kind: 'event' as const, movable: false,
+        startMs: new Date(e.start_time).getTime(), endMs: new Date(e.end_time).getTime(), limitMs: 0,
+      })),
+      ...blocks.map((b, i) => ({
+        id: `activity:${b.activityId}:${i}`, title: b.name, kind: 'activity' as const, movable: false,
+        startMs: new Date(b.start_time).getTime(), endMs: new Date(b.end_time).getTime(), limitMs: 0,
+      })),
+    ];
+    const plan = planPush(items, blockStartMs, blockEndMs);
+
+    const original = new Map((tasksRes.data || []).map((t: any) => [t.id, t]));
+    const undo = {
+      instanceId: instance.id,
+      at: new Date().toISOString(),
+      tasks: [...plan.moves.filter((m) => m.kind === 'task').map((m) => m.id), ...plan.overflow.filter((o) => o.kind === 'task').map((o) => o.id)]
+        .map((id) => ({ id, start_time: original.get(id)?.start_time, end_time: original.get(id)?.end_time })),
+    };
+
+    // Save the block AND the undo record FIRST. If a task update below fails partway, the undo record
+    // already holds every original time, so undo_activity_start can still restore the whole day.
+    await writeActivityConfig(supabase, userId, config, withInstance, tz, { lastActivityStart: undo });
+
+    for (const m of plan.moves.filter((x) => x.kind === 'task')) {
+      const { error } = await supabase.from('tasks')
+        .update({ start_time: new Date(m.startMs).toISOString(), end_time: new Date(m.endMs).toISOString(), is_scheduled: true })
+        .eq('id', m.id).eq('user_id', userId);
+      if (error) throw new Error(`${error.message} — some tasks may have moved; say "undo" to restore the day`);
+    }
+    for (const o of plan.overflow.filter((x) => x.kind === 'task')) {
+      const { error } = await supabase.from('tasks')
+        .update({ start_time: null, end_time: null, is_scheduled: false })
+        .eq('id', o.id).eq('user_id', userId);
+      if (error) throw new Error(`${error.message} — some tasks may have moved; say "undo" to restore the day`);
+    }
+
+    const fmt = (ms: number) => new Date(ms).toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });
+    const lines = [
+      `${name} reserved ${fmt(blockStartMs)}–${fmt(blockEndMs)}.`,
+      plan.moves.length ? `Moved: ${plan.moves.map((m) => `${m.title} → ${fmt(m.startMs)}`).join('; ')}.` : 'Nothing needed to move.',
+      plan.overflow.length ? `No longer fits today, so it goes back to be rescheduled: ${plan.overflow.map((o) => o.title).join('; ')}.` : '',
+      plan.conflicts.length ? `CONFLICT — these can't move and overlap ${name}: ${plan.conflicts.map((c) => `${c.title} at ${fmt(c.startMs)}`).join('; ')}. Ask the user whether to skip them or shorten ${name}.` : '',
+      'Say "undo" to put the day back exactly as it was.',
+    ].filter(Boolean);
+    return {
+      success: true,
+      result: { activity: instance, moves: plan.moves, overflow: plan.overflow, conflicts: plan.conflicts },
+      message: lines.join(' '),
+    };
+  } catch (e) {
+    return { success: false, error: extractErrorMessage(e) };
+  }
+}
+
+async function undoActivityStart(supabase: any, userId: string): Promise<ExecuteToolResponse> {
+  try {
+    const { config, timezone, activities } = await readActivityPrefs(supabase, userId);
+    const last = config?.lastActivityStart;
+    if (!last?.instanceId) return { success: false, error: 'There is no recent activity start to undo.' };
+    for (const t of last.tasks || []) {
+      const { error } = await supabase.from('tasks')
+        .update({ start_time: t.start_time ?? null, end_time: t.end_time ?? null, is_scheduled: !!t.start_time })
+        .eq('id', t.id).eq('user_id', userId);
+      if (error) throw error;
+    }
+    await writeActivityConfig(supabase, userId, config, activities.filter((a: any) => a.id !== last.instanceId), timezone, { lastActivityStart: null });
+    return { success: true, result: { restored: (last.tasks || []).length }, message: `Undone — ${(last.tasks || []).length} task(s) are back where they were and the block is removed.` };
+  } catch (e) {
+    return { success: false, error: extractErrorMessage(e) };
+  }
+}
+
+async function unscheduleTask(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   if (!args.task_id) return { success: false, error: "Task ID is required" };
 
   try {
@@ -1323,10 +1715,12 @@ async function unscheduleTask(supabase: any, args: any): Promise<ExecuteToolResp
         status: 'BACKLOG'
       })
       .eq('id', args.task_id)
+      .eq('user_id', userId)
       .select()
-      .single();
+      .maybeSingle();
 
     if (error) throw error;
+    if (!data) return { success: false, error: "Task not found" };
 
     return { 
       success: true, 
@@ -1446,9 +1840,17 @@ async function parseAndCreateTasks(
       return { success: false, error: "No tasks could be parsed from the input. Please try rephrasing." };
     }
 
+    // Creation-time dedup guard (no-op unless config.dedup.enabled). Runs over the WHOLE parsed batch
+    // at once, so it catches duplicates against existing open tasks AND within this same batch.
+    const dedupRun = await runDedup({ supabase, userId, candidates: tasks.map((t: any) => t.title || '') });
+    const dedupEntries: DedupLogEntry[] = [];               // written via finalizeDedup
+    const dedupPreview: any[] = [];                          // always surfaced in the response
+    let dedupSkippedCount = 0;
+
     // 5. Create tasks in database with normalized dates
     const createdTasks: any[] = [];
-    for (const task of tasks) {
+    for (let ti = 0; ti < tasks.length; ti++) {
+      const task = tasks[ti];
       const isPriority = task.intent === 'priority';
 
       // Normalize due_date to end-of-day in user's timezone.
@@ -1486,7 +1888,7 @@ async function parseAndCreateTasks(
         title: task.title,
         description: task.description || null,
         priority: (task.priority || 'MEDIUM').toUpperCase(),
-        category: (task.category || 'LIFE').toUpperCase(),
+        category: normalizeCategory(task.category),
         status: task.status || args.default_status || ((normalizedStartTime || normalizedDueDate) ? 'UP_NEXT' : 'BACKLOG'),
         is_priority: isPriority,
         due_date: normalizedDueDate,
@@ -1498,6 +1900,21 @@ async function parseAndCreateTasks(
         user_id: userId
       };
 
+      // Dedup decision for this candidate (index-aligned with the parsed batch).
+      const dedupOutcome = dedupRun.enabled ? dedupRun.outcomes[ti] : null;
+      if (dedupOutcome && !dedupOutcome.create) {
+        const d = dedupOutcome.decision;
+        dedupSkippedCount++;
+        dedupPreview.push({ title: task.title, action: 'skipped', matched: d.matchedTitle, method: d.method, similarity: d.similarity });
+        console.log(`[PARSE_AND_CREATE] Skipped duplicate "${task.title}" (~ "${d.matchedTitle}", ${d.method})`);
+        dedupEntries.push({ action: 'skipped', candidate: taskData, matched_task_id: d.matchedTaskId, matched_title: d.matchedTitle, method: d.method, similarity: d.similarity });
+        continue; // do NOT insert
+      }
+      if (dedupOutcome && dedupOutcome.extraTags.length) {
+        (taskData as any).tags = Array.from(new Set([...((taskData as any).tags || []), ...dedupOutcome.extraTags]));
+        dedupPreview.push({ title: task.title, action: 'flagged', matched: dedupOutcome.decision.matchedTitle, method: dedupOutcome.decision.method, similarity: dedupOutcome.decision.similarity });
+      }
+
       const { data, error } = await supabase
         .from('tasks')
         .insert([taskData])
@@ -1507,6 +1924,12 @@ async function parseAndCreateTasks(
       if (data) {
         createdTasks.push(data);
         console.log(`[PARSE_AND_CREATE] Created task: ${data.title} (${data.id}) is_priority=${isPriority} at ${new Date().toISOString()}`);
+
+        // Flagged (ambiguous) task WAS created — record it so the user can review/undo the flag.
+        if (dedupOutcome && dedupOutcome.extraTags.length) {
+          const d = dedupOutcome.decision;
+          dedupEntries.push({ action: 'flagged', candidate: taskData, matched_task_id: d.matchedTaskId, matched_title: d.matchedTitle, method: d.method, similarity: d.similarity, created_task_id: data.id });
+        }
 
         // Wire priority board mapping when intent === "priority"
         if (isPriority) {
@@ -1579,7 +2002,20 @@ async function parseAndCreateTasks(
       }
     }
 
+    // Persist dedup audit rows + queue the single batch notification.
+    if (dedupEntries.length) {
+      await finalizeDedup(supabase, { userId, boardId: board.id, source: 'parse_and_create_tasks', entries: dedupEntries });
+    }
+
     if (createdTasks.length === 0) {
+      // All parsed tasks were skipped as duplicates — that's a success, not a failure.
+      if (dedupSkippedCount > 0) {
+        return {
+          success: true,
+          result: { tasks: [], skippedDuplicates: dedupPreview },
+          message: `All ${dedupSkippedCount} task${dedupSkippedCount > 1 ? 's' : ''} already exist — skipped as duplicates. Undo from your task history if that's wrong.`
+        };
+      }
       return { success: false, error: "Failed to create any tasks" };
     }
 
@@ -1722,7 +2158,10 @@ async function parseAndCreateTasks(
           due_date: t.due_date,
           start_time: t.start_time,
           is_scheduled: t.is_scheduled
-        }))
+        })),
+        // Dedup summary (empty unless the guard is enabled and acted). Always surfaced so callers/UI
+        // can show what was skipped/flagged.
+        ...(dedupPreview.length ? { dedupedDuplicates: dedupPreview } : {})
       },
       message,
       extractedFacts: { 
@@ -1733,6 +2172,19 @@ async function parseAndCreateTasks(
     };
   } catch (error) {
     console.error('[PARSE_AND_CREATE] Error:', error);
+    return { success: false, error: extractErrorMessage(error) };
+  }
+}
+
+// Restore task(s) the dedup guard skipped, from the task_dedup_log payload (bypasses the guard).
+// Default: undo the most-recent batch (rows sharing a near-identical created_at). Pass {all:true} to
+// restore every un-undone skip, or {log_id} to restore one specific event.
+async function undoDedup(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    // Logic lives in _shared/task-dedup.ts (undoDedupSkips) so it is unit-testable; it is GATED on
+    // the same config.dedup.enabled flag as the guard and touches no rows while the guard is off.
+    return await undoDedupSkips(supabase, userId, args);
+  } catch (error) {
     return { success: false, error: extractErrorMessage(error) };
   }
 }
@@ -1923,6 +2375,16 @@ async function createGoogleEvent(supabase: any, userId: string, args: any, userP
   } catch (error) {
     return { success: false, error: extractErrorMessage(error) };
   }
+}
+
+/** Shape a calendar-edit ToolResult as an ExecuteToolResponse. `result` carries candidates /
+ *  nearby / needs_user_request so the model can ask the user which event, or for consent. */
+function calendarEditResponse(r: Record<string, unknown> & { success: boolean }): ExecuteToolResponse {
+  return {
+    success: r.success,
+    result: r,
+    ...(r.success ? { message: String(r.message ?? 'Done.') } : { error: String(r.error ?? 'Calendar edit failed.') }),
+  };
 }
 
 async function createCalendarEvent(supabase: any, userId: string, args: any, userProfile?: any): Promise<ExecuteToolResponse> {
@@ -2762,6 +3224,12 @@ async function findOpenSlots(supabase: any, userId: string, args: any, timezone?
     for (const e of (eventsRes.data || [])) {
       occupied.push({ start: itineraryHourFromIso(e.start_time, tz), end: itineraryHourFromIso(e.end_time, tz) });
     }
+    // Recurring activities (lunch, church, 1:1s…) are reserved time, not open slots.
+    const { data: prefsRow } = await supabase.from('user_scheduling_prefs').select('config').eq('user_id', userId).maybeSingle();
+    const bounds = localDateToUtcBounds(date, tz);
+    for (const b of activityBusySlots(prefsRow?.config ?? {}, bounds.start, bounds.end, tz, eventsRes.data || [])) {
+      occupied.push({ start: itineraryHourFromIso(b.start_time, tz), end: itineraryHourFromIso(b.end_time, tz) });
+    }
     occupied.sort((a, b) => a.start - b.start);
     const range = args.window ? itineraryWindowRange(args.window) : { start: isWeekend ? 9 : 6, end: 23 };
     const slots: Array<{ start_hour: number; end_hour: number; duration_min: number; window: string }> = [];
@@ -2793,26 +3261,26 @@ async function moveTaskToDay(supabase: any, userId: string, args: any, timezone?
     // Fall back to a default time at the start of the requested window or 9am
     const range = itineraryWindowRange(args.window || 'business_hours');
     const fallback = `${String(range.start).padStart(2, '0')}:00`;
-    return rescheduleTask(supabase, { task_id: args.task_id, new_date: args.date, new_start_time: fallback }, tz);
+    return rescheduleTask(supabase, userId, { task_id: args.task_id, new_date: args.date, new_start_time: fallback }, tz);
   }
   const slot = (slotResp.result as any).slots[0];
   const hh = String(Math.floor(slot.start_hour)).padStart(2, '0');
   const mm = String(Math.round((slot.start_hour - Math.floor(slot.start_hour)) * 60)).padStart(2, '0');
-  return rescheduleTask(supabase, { task_id: args.task_id, new_date: args.date, new_start_time: `${hh}:${mm}` }, tz);
+  return rescheduleTask(supabase, userId, { task_id: args.task_id, new_date: args.date, new_start_time: `${hh}:${mm}` }, tz);
 }
 
-async function swapTaskOrder(supabase: any, args: any): Promise<ExecuteToolResponse> {
+async function swapTaskOrder(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   if (!args.task_id_a || !args.task_id_b) return { success: false, error: 'task_id_a and task_id_b required' };
   try {
-    const { data: tasks, error } = await supabase.from('tasks').select('id, title, start_time, end_time').in('id', [args.task_id_a, args.task_id_b]);
+    const { data: tasks, error } = await supabase.from('tasks').select('id, title, start_time, end_time').in('id', [args.task_id_a, args.task_id_b]).eq('user_id', userId);
     if (error) throw error;
-    if (!tasks || tasks.length !== 2) return { success: false, error: 'Both tasks not found' };
+    if (!tasks || tasks.length !== 2) return { success: false, error: 'Task not found: both tasks must exist and belong to you' };
     const a = tasks.find((t: any) => t.id === args.task_id_a);
     const b = tasks.find((t: any) => t.id === args.task_id_b);
     if (!a?.start_time || !b?.start_time) return { success: false, error: 'Both tasks must be scheduled' };
     const [updA, updB] = await Promise.all([
-      supabase.from('tasks').update({ start_time: b.start_time, end_time: b.end_time }).eq('id', a.id),
-      supabase.from('tasks').update({ start_time: a.start_time, end_time: a.end_time }).eq('id', b.id),
+      supabase.from('tasks').update({ start_time: b.start_time, end_time: b.end_time }).eq('id', a.id).eq('user_id', userId),
+      supabase.from('tasks').update({ start_time: a.start_time, end_time: a.end_time }).eq('id', b.id).eq('user_id', userId),
     ]);
     if (updA.error) throw updA.error;
     if (updB.error) throw updB.error;
@@ -2822,14 +3290,15 @@ async function swapTaskOrder(supabase: any, args: any): Promise<ExecuteToolRespo
   }
 }
 
-async function setPriorityRank(supabase: any, args: any): Promise<ExecuteToolResponse> {
+async function setPriorityRank(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   if (!args.task_id) return { success: false, error: 'task_id required' };
   try {
     const update: any = args.unset
       ? { is_priority: false, priority_rank: null }
       : { is_priority: true, priority_rank: args.rank ?? null };
-    const { data, error } = await supabase.from('tasks').update(update).eq('id', args.task_id).select('id, title, is_priority, priority_rank').single();
+    const { data, error } = await supabase.from('tasks').update(update).eq('id', args.task_id).eq('user_id', userId).select('id, title, is_priority, priority_rank').maybeSingle();
     if (error) throw error;
+    if (!data) return { success: false, error: 'Task not found' };
     return { success: true, result: { task: data }, message: args.unset ? `Removed "${data.title}" from priority lane` : `"${data.title}" set as priority${data.priority_rank ? ` (rank ${data.priority_rank})` : ''}` };
   } catch (error) {
     return { success: false, error: extractErrorMessage(error) };

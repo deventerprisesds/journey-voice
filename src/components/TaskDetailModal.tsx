@@ -541,6 +541,7 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="LIFE">Life</SelectItem>
+                  <SelectItem value="JOB">Job</SelectItem>
                   <SelectItem value="CAREER">Career</SelectItem>
                   <SelectItem value="VENTURES">Ventures</SelectItem>
                   <SelectItem value="EDUCATION">Education</SelectItem>

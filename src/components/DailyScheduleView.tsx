@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ChevronLeft, ChevronRight, Clock, Calendar as CalendarIcon, Plus, List, LayoutGrid } from 'lucide-react';
-import { Task, ExternalCalendarEvent } from '@/types/task';
+import { Task, ExternalCalendarEvent, TaskCategory } from '@/types/task';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
@@ -268,8 +268,11 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
   };
 
   // Category colors for badges in list view
-  const categoryColors: Record<string, string> = {
+  // Typed by the shared category list so a category missing here is a type error.
+  // PERSONAL is excluded on purpose: it never had an entry here, so its lookup stays undefined (unchanged).
+  const categoryColors: Record<Exclude<TaskCategory, 'PERSONAL'>, string> = {
     LIFE: 'bg-[hsl(var(--category-life))] text-white',
+    JOB: 'bg-[hsl(var(--category-job))] text-white',
     CAREER: 'bg-[hsl(var(--category-career))] text-white',
     VENTURES: 'bg-[hsl(var(--category-ventures))] text-white',
     EDUCATION: 'bg-[hsl(var(--category-education))] text-white',

@@ -1,6 +1,8 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { CATEGORY_KEYS, normalizeCategory } from "../_shared/categories.ts";
+import { buildCategoryGuide, categoryHintsFromKeywords } from "../_shared/category-guide.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -96,6 +98,27 @@ serve(async (req) => {
 
     console.log('✅ Starting task parsing...');
 
+    // Category briefing: the owner's employer (Profile > Company) and name hints (Settings > Keyword rules,
+    // Flexible rows with a category lane). One read each; a failure only drops the names, never the parse.
+    let employer: string | null = null;
+    let categoryHints: ReturnType<typeof categoryHintsFromKeywords> = [];
+    if (userId) {
+      try {
+        const [{ data: profile, error: profileErr }, { data: prefs, error: prefsErr }] = await Promise.all([
+          supabaseAdmin.from('profiles').select('company').eq('user_id', userId).maybeSingle(),
+          supabaseAdmin.from('user_scheduling_prefs').select('config').eq('user_id', userId).maybeSingle(),
+        ]);
+        if (profileErr || prefsErr) {
+          console.warn('⚠️ Category context read failed; parsing without it:', profileErr?.message, prefsErr?.message);
+        }
+        employer = (profile as any)?.company ?? null;
+        categoryHints = categoryHintsFromKeywords((prefs as any)?.config?.contextRules?.keywords);
+      } catch (e) {
+        console.warn('⚠️ Could not load category context (employer / name hints); parsing without them:', e);
+      }
+    }
+    const categoryGuide = buildCategoryGuide({ employer, hints: categoryHints });
+
     // Get current date for context - USE USER'S TIMEZONE
     const now = new Date();
     const userTz = timezone || 'America/New_York';
@@ -147,7 +170,7 @@ Parse the user's input into one or more tasks. Each task should have:
 - title: Clear, actionable task title
 - description: Optional detailed description
 - priority: LOW, MEDIUM, HIGH, or URGENT (infer from urgency words)
-- category: LIFE, CAREER, VENTURES, or EDUCATION (infer from context)
+- category: ${CATEGORY_KEYS.join(', ')} (see the CATEGORY rules below)
 - due_date: ISO date string for DEADLINE when task must be completed (date only, set to end of day)
 - start_time: ISO timestamp ONLY if user explicitly schedules a specific time to work on task
 - end_time: ISO timestamp ONLY if user specifies when scheduled work should end
@@ -197,17 +220,24 @@ VENTURES (Business/entrepreneurial activities):
 - Networking for business opportunities
 - Examples: "Find universities to sell products to", "Pitch to potential clients", "Research market opportunities"
 
-CAREER (Employment/job-related):
-- Work tasks, job responsibilities, meetings with colleagues/boss
-- Professional development within your current role
-- Career advancement activities
-- Examples: "Prepare presentation for client", "Team meeting", "Performance review"
+JOB (Work for the owner's employer):
+- Work tasks, job responsibilities, meetings with colleagues/boss, standups, 1:1s
+- Onboarding, timesheets, benefits, compliance training, the employer's tools
+- SDLC / software-delivery work, ops decks, ops process diagrams (unless it names one of the owner's own products: then VENTURES)
+- Examples: "Prepare presentation for client", "Team meeting", "Performance review", "Complete benefits enrollment"
+
+CAREER (Getting the NEXT role -- not the current job):
+- Job applications, interviews, recruiters, LinkedIn, résumé/CV
+- Career coaching, career research
+- Examples: "Apply for the Director role at Acme", "Update LinkedIn headline", "Email career coach"
 
 LIFE (Personal/non-work activities):
 - Family, friends, personal errands, household tasks
 - Personal health, fitness, hobbies
 - Social events not related to work/business
 - Examples: "Pick up groceries", "Doctor appointment", "Dinner with friends"
+
+${categoryGuide}
 
 CRITICAL RULES:
 1. If task mentions MIT, EMBA, or university in a LEARNING context → EDUCATION
@@ -239,14 +269,15 @@ EDUCATION - Self-paced personal learning without strict institutional deadlines:
 
 Primary task types:
 - LIFE: Personal activities, health, family, hobbies, self-care
-- CAREER: Job-related work, professional development, meetings
+- JOB: Work for the employer: job responsibilities, meetings, standups, the employer's tools
+- CAREER: Getting the next role: applications, interviews, LinkedIn, career coach
 - VENTURES: Business ideas, entrepreneurship, side projects
 - PROF_EDUCATION: Formal degree programs (MIT, EMBA, universities)
 - EDUCATION: Self-paced learning (Coursera, certifications, personal study)
 
 Examples (note the status is a WORKFLOW state in every one, never the category):
 - "Doctor appointment" → category: "LIFE", status: "BACKLOG"
-- "Team standup meeting" → category: "CAREER", status: "BACKLOG"
+- "Team standup meeting" → category: "JOB", status: "BACKLOG"
 - "Complete MIT assignment" → category: "PROF_EDUCATION", status: "BACKLOG"
 - "EMBA group project" → category: "PROF_EDUCATION", status: "BACKLOG"
 - "Take Coursera course" → category: "EDUCATION", status: "BACKLOG"
@@ -266,7 +297,7 @@ Return JSON in this exact format:
       "title": "string",
       "description": "string or null",
       "priority": "LOW|MEDIUM|HIGH|URGENT",
-      "category": "LIFE|CAREER|VENTURES|PROF_EDUCATION|EDUCATION",
+      "category": "${CATEGORY_KEYS.join('|')}",
       "due_date": "ISO string or null",
       "start_time": null,
       "end_time": null,
@@ -294,7 +325,7 @@ Examples (category varies; status is a workflow state in every one):
 - "Find universities to sell our software to" → category: "VENTURES", status: "BACKLOG"
 - "Pitch product to MIT procurement office" → category: "VENTURES", status: "BACKLOG"
 - "Pay credit cards" → category: "LIFE", status: "BACKLOG"
-- "Prepare slides for client meeting" → category: "CAREER", status: "BACKLOG"`;
+- "Prepare slides for client meeting" → category: "JOB", status: "BACKLOG"`;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -349,7 +380,12 @@ Examples (category varies; status is a workflow state in every one):
         ? new Date(targetDate).toDateString() 
         : new Date().toDateString();
       
-      const tasks = rawTasks.map((task: any) => {
+      const tasks = rawTasks.map((rawTask: any) => {
+        // A category the model invents ("Work", "job ") maps onto a real one; an exact name maps to itself.
+        const task = { ...rawTask, category: normalizeCategory(rawTask?.category) };
+        if (rawTask?.category !== task.category) {
+          console.log(`🏷️ Category "${rawTask?.category}" normalised to ${task.category} for "${task.title}"`);
+        }
         // Check if task's due_date is today
         const taskDueDate = task.due_date ? new Date(task.due_date).toDateString() : null;
         const isForToday = taskDueDate === todayStr;

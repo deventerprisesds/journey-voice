@@ -11,11 +11,21 @@ import { useToast } from '@/hooks/use-toast';
 import {
   loadUserSchedulingConfig,
   saveUserSchedulingConfig,
+  clearSchedulingConfigCache,
 } from '@/services/schedulingService';
 import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig, type SchedulingCaveat } from '@/config/schedulingRules';
 import { Clock, Calendar, TrendingUp, Tag, Key, Target, Plus, X, FileText, Globe, Timer } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
+import ActivitiesSettings from '@/components/ActivitiesSettings';
 import { TIMEZONE_OPTIONS, getBrowserTimezone, formatTimezoneWithOffset } from '@/lib/timezone';
+import { CATEGORY_KEYS, CATEGORY_LABELS, toCategoryKey } from '../../supabase/functions/_shared/categories.ts';
+
+// Keyword-rule lane Select. A lane that names a category gates the keyword to that category's tasks;
+// any other stored lane (e.g. `flexible`) applies to all tasks and shows as "No category".
+// Radix Select cannot hold an empty-string value, so "No category" uses a sentinel that is never stored.
+const NO_CATEGORY_LANE = '__no_category__';
+/** What a newly added keyword, or an explicit "No category" choice, stores as its lane. */
+const NO_CATEGORY_STORED = 'flexible';
 
 const SchedulingSettings: React.FC = () => {
   const { user } = useAuth();
@@ -23,6 +33,10 @@ const SchedulingSettings: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [config, setConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
+  // Activities are also changed by agents ("church Sundays at 10", "headed to the gym"). Only send
+  // them when they were edited on THIS page, so saving another setting never overwrites an agent's
+  // change made while the page was open.
+  const [activitiesEdited, setActivitiesEdited] = useState(false);
 
   useEffect(() => {
     if (user?.id) {
@@ -34,8 +48,11 @@ const SchedulingSettings: React.FC = () => {
     if (!user?.id) return;
     setLoading(true);
     try {
+      // Read fresh, not the session cache: an agent may have changed activities since it was filled.
+      clearSchedulingConfigCache();
       const loadedConfig = await loadUserSchedulingConfig(user.id);
       setConfig(loadedConfig);
+      setActivitiesEdited(false);
     } catch (error) {
       console.error('Failed to load scheduling config:', error);
       toast({
@@ -52,7 +69,11 @@ const SchedulingSettings: React.FC = () => {
     if (!user?.id) return;
     setSaving(true);
     try {
-      const success = await saveUserSchedulingConfig(user.id, config);
+      const success = await saveUserSchedulingConfig(
+        user.id,
+        activitiesEdited ? config : { ...config, activities: undefined },
+      );
+      if (success) setActivitiesEdited(false);
       if (success) {
         toast({
           title: 'Saved',
@@ -344,6 +365,64 @@ const SchedulingSettings: React.FC = () => {
         </CardContent>
       </Card>
 
+      {/* Coursework work sessions (P3) */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Target className="h-5 w-5" />
+            <CardTitle>Coursework Work Sessions</CardTitle>
+          </div>
+          <CardDescription>
+            Each dated assignment becomes "session 1 of N" cards, spread from today until it is finished ahead of the due date.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="assignment-sessions-enabled"
+              checked={(config.assignmentSessions ?? DEFAULT_SCHEDULING_CONFIG.assignmentSessions!).enabled}
+              onCheckedChange={(v) => setConfig({
+                ...config,
+                assignmentSessions: { ...(config.assignmentSessions ?? DEFAULT_SCHEDULING_CONFIG.assignmentSessions!), enabled: v === true },
+              })}
+            />
+            <Label htmlFor="assignment-sessions-enabled" className="text-sm">Spread assignments into work sessions</Label>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {([
+              ['finishBufferDays', 'Finish this many days before due', 0, 30],
+              ['sessionMinutes', 'Session length (minutes)', 15, 240],
+              ['defaultEffortMinutes', 'Effort when Nexus has none (minutes)', 15, 2400],
+              ['lateBufferHours', 'If already inside that window: stop this many hours before due', 0, 24],
+            ] as const).map(([key, label, min, max]) => {
+              const sess = config.assignmentSessions ?? DEFAULT_SCHEDULING_CONFIG.assignmentSessions!;
+              return (
+                <div key={key} className="space-y-2">
+                  <Label className="text-sm">{label}</Label>
+                  <Input
+                    type="number"
+                    min={min}
+                    max={max}
+                    value={sess[key]}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value);
+                      if (Number.isNaN(n)) return;
+                      setConfig({ ...config, assignmentSessions: { ...sess, [key]: n } });
+                    }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Activities — reserved time inside the windows above (lunch, gym, church, 1:1s); never tasks */}
+      <ActivitiesSettings
+        config={config}
+        onChange={(activities) => { setConfig({ ...config, activities }); setActivitiesEdited(true); }}
+      />
+
       {/* Workload Balance */}
       <Card>
         <CardHeader>
@@ -540,6 +619,24 @@ const SchedulingSettings: React.FC = () => {
                   />
                 </div>
                 <div className="space-y-2">
+                  <Label className="text-sm" title="Added to the score when tasks compete for the same time. Higher wins.">Wins conflicts (weight)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="50"
+                    value={(config.categoryWeights ?? DEFAULT_SCHEDULING_CONFIG.categoryWeights ?? {})[category] ?? 0}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        categoryWeights: {
+                          ...(config.categoryWeights ?? DEFAULT_SCHEDULING_CONFIG.categoryWeights ?? {}),
+                          [category]: Math.max(0, parseInt(e.target.value) || 0),
+                        },
+                      })
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
                   <Label className="text-sm">Max Per Day</Label>
                   <Input
                     type="number"
@@ -560,6 +657,31 @@ const SchedulingSettings: React.FC = () => {
                       })
                     }
                   />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm">Max Per Day (weekends)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="10"
+                    placeholder={mapping.maxPerDay != null ? `Same as weekdays (${mapping.maxPerDay})` : 'No limit'}
+                    value={mapping.maxPerDayWeekend ?? ''}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        categoryMappings: {
+                          ...config.categoryMappings,
+                          [category]: {
+                            ...mapping,
+                            maxPerDayWeekend: e.target.value !== '' ? parseInt(e.target.value) : undefined,
+                          },
+                        },
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Weekend windows are longer than a weekday evening. Leave blank to reuse the weekday number.
+                  </p>
                 </div>
               </div>
             </div>
@@ -663,6 +785,10 @@ const SchedulingSettings: React.FC = () => {
           <CardDescription>
             Configure keywords that trigger specific time windows and board lanes
           </CardDescription>
+          <p className="text-xs text-muted-foreground">
+            A row whose time window is Flexible and whose lane is a category is a name hint for the
+            category AI (e.g. "huddle" &rarr; Ventures) and never moves a task in the schedule.
+          </p>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-3">
@@ -712,23 +838,33 @@ const SchedulingSettings: React.FC = () => {
                     <SelectItem value="weekends">Weekends</SelectItem>
                   </SelectContent>
                 </Select>
-                <Input
-                  value={status}
-                  onChange={(e) =>
+                {/* Lane. The stored value is only rewritten when the user picks an option, so a row
+                    whose stored lane is not a category (shown as "No category") saves back unchanged. */}
+                <Select
+                  value={toCategoryKey(status) ?? NO_CATEGORY_LANE}
+                  onValueChange={(value) =>
                     setConfig({
                       ...config,
                       contextRules: {
                         ...config.contextRules,
                         keywords: {
                           ...config.contextRules.keywords,
-                          [keyword]: [timeWindow, e.target.value],
+                          [keyword]: [timeWindow, value === NO_CATEGORY_LANE ? NO_CATEGORY_STORED : value],
                         },
                       },
                     })
                   }
-                  className="w-[140px]"
-                  placeholder="Status"
-                />
+                >
+                  <SelectTrigger className="w-[200px]" aria-label="Lane">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_CATEGORY_LANE}>No category (applies to all)</SelectItem>
+                    {CATEGORY_KEYS.map((key) => (
+                      <SelectItem key={key} value={key}>{CATEGORY_LABELS[key]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <Button
                   variant="ghost"
                   size="icon"
@@ -759,7 +895,7 @@ const SchedulingSettings: React.FC = () => {
                   ...config.contextRules,
                   keywords: {
                     ...config.contextRules.keywords,
-                    [`new_keyword_${Date.now()}`]: ['flexible', 'LIFE'],
+                    [`new_keyword_${Date.now()}`]: ['flexible', NO_CATEGORY_STORED],
                   },
                 },
               });

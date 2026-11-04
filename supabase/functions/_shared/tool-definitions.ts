@@ -11,6 +11,8 @@
  * edge function to update the OpenAI Assistant's static tool list.
  */
 
+import { CATEGORY_KEYS } from './categories.ts';
+
 export interface ToolDefinition {
   type: "function";
   name: string;
@@ -45,8 +47,8 @@ export function getToolDefinitions(): ToolDefinition[] {
           },
           category: {
             type: "string",
-            enum: ["LIFE", "CAREER", "VENTURES", "PROF_EDUCATION", "EDUCATION", "PERSONAL"],
-            description: "Life area filter. Use for area-specific queries like 'life tasks', 'career items'."
+            enum: [...CATEGORY_KEYS],
+            description: "Life area filter. Use for area-specific queries like 'life tasks', 'job tasks', 'career items'. JOB = work for the employer; CAREER = getting the next role."
           }
         }
       }
@@ -85,7 +87,7 @@ export function getToolDefinitions(): ToolDefinition[] {
             description: "Task workflow status. IN_REVIEW = finished, awaiting the user's approval before DONE."
           },
           priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
-          category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] },
+          category: { type: "string", enum: [...CATEGORY_KEYS], description: "JOB = work for the employer; CAREER = getting the next role; VENTURES = the owner's own products and clients." },
           assigned_agent: { type: "string", description: "Huddle agent id to assign this task to (e.g. finn-reid). Pass empty string to unassign." },
           tags: { type: "array", items: { type: "string" }, description: "Labels for the task (e.g. needs-plaid, quick-win). Replaces existing tags." }
         },
@@ -150,7 +152,7 @@ export function getToolDefinitions(): ToolDefinition[] {
             description: "Named time windows to prefer, in order. MUST be existing window names: morning, business_hours, after_work, evening, weekends. Never invent a name."
           },
           keywords: { type: "array", items: { type: "string" }, description: "Match tasks whose TITLE contains any of these, e.g. ['research','explore']. Omit to match on category/tags instead." },
-          categories: { type: "array", items: { type: "string" }, description: "Match tasks in any of these categories: CAREER, PROF_EDUCATION, EDUCATION, VENTURES, LIFE, PERSONAL" },
+          categories: { type: "array", items: { type: "string" }, description: `Match tasks in any of these categories: ${CATEGORY_KEYS.join(', ')}` },
           tags: { type: "array", items: { type: "string" }, description: "Match tasks carrying any of these tags" },
           expires_at: { type: "string", description: "ISO timestamp when this stops applying. OMIT for 'until I clear it' — do not guess an expiry the user did not state." }
         },
@@ -175,6 +177,106 @@ export function getToolDefinitions(): ToolDefinition[] {
         },
         required: []
       }
+    },
+    // ── ACTIVITIES ───────────────────────────────────────────────
+    // Reserved time that is NOT a task: lunch, gym, church, haircut, standup, 1:1s. Stored in the
+    // scheduling config (never as task rows) and avoided by every scheduler. _shared/activities.ts.
+    {
+      type: "function",
+      name: "add_activity",
+      description: "Reserve a block of the user's time for something they DO rather than work to complete — gym, lunch, church, a haircut appointment, morning standup, a direct-report or peer 1:1, school pickup, LinkedIn writing time. Activities are never tasks: they do not go on the task board, are never auto-worked, and every scheduler plans tasks around them. Use kind 'recurring' with days for repeating ones ('church Sundays 10am', '1:1 with Sam every other Tuesday at 2'), 'one_off' with date for a single appointment ('haircut Thursday at 11'), 'on_demand' for something with no fixed time that the user starts when they go (gym). mode 'locked' = fixed time; 'floating' = may slide between earliest and latest to fit around meetings (lunch). Ask for a time only if a scheduled activity has none.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Short name the user will recognize, e.g. 'Church', '1:1 with Sam', 'Lunch'" },
+          kind: { type: "string", enum: ["recurring", "one_off", "on_demand"] },
+          mode: { type: "string", enum: ["locked", "floating"], description: "Default locked" },
+          start: { type: "string", description: "HH:mm 24-hour start (preferred start if floating). Required unless on_demand." },
+          duration_min: { type: "number", description: "Length in minutes" },
+          days: { type: "array", items: { type: "number" }, description: "recurring: days of week, 0=Sun 1=Mon … 6=Sat" },
+          every_n_weeks: { type: "number", description: "recurring: 2 = every other week. Omit for weekly." },
+          anchor_date: { type: "string", description: "YYYY-MM-DD of the first occurrence, for every_n_weeks > 1" },
+          date: { type: "string", description: "one_off: YYYY-MM-DD" },
+          earliest: { type: "string", description: "floating: HH:mm earliest start of the range" },
+          latest: { type: "string", description: "floating: HH:mm by which it must end" },
+          parent_window: { type: "string", description: "Which time window it sits inside: morning, business_hours, after_work, evening, weekends" },
+          aliases: { type: "array", items: { type: "string" }, description: "Other words the user uses for it, e.g. ['workout','lift'] for gym" },
+          pushes_schedule: { type: "boolean", description: "on_demand: starting it pushes the rest of the day later (true for gym)" }
+        },
+        required: ["name", "duration_min"]
+      }
+    },
+    {
+      type: "function",
+      name: "list_activities",
+      description: "List the user's activities (recurring, one-off and on-demand reserved time) with their days and times.",
+      parameters: { type: "object", properties: {}, required: [] }
+    },
+    {
+      type: "function",
+      name: "update_activity",
+      description: "Change an existing activity — its time, days, length, or pause it (enabled false). Identify it by name (or activity_id from list_activities). To rename, pass new_name.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "The activity's current name (or an alias)" },
+          activity_id: { type: "string" },
+          new_name: { type: "string" },
+          start: { type: "string", description: "HH:mm 24-hour" },
+          duration_min: { type: "number" },
+          days: { type: "array", items: { type: "number" } },
+          every_n_weeks: { type: "number" },
+          mode: { type: "string", enum: ["locked", "floating"] },
+          earliest: { type: "string" },
+          latest: { type: "string" },
+          enabled: { type: "boolean", description: "false pauses it without deleting" }
+        },
+        required: []
+      }
+    },
+    {
+      type: "function",
+      name: "remove_activity",
+      description: "Delete an activity permanently. For a single day off use skip_activity; to pause use update_activity with enabled false.",
+      parameters: {
+        type: "object",
+        properties: { name: { type: "string" }, activity_id: { type: "string" } },
+        required: []
+      }
+    },
+    {
+      type: "function",
+      name: "skip_activity",
+      description: "Skip one occurrence of an activity ('skip lunch today', 'no church this Sunday') so that time opens up for tasks. Defaults to today.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          activity_id: { type: "string" },
+          date: { type: "string", description: "YYYY-MM-DD; defaults to today" }
+        },
+        required: []
+      }
+    },
+    {
+      type: "function",
+      name: "start_activity",
+      description: "The user is going to do an activity NOW (or at a stated time today) — 'I'm headed to the gym', 'going to lunch', 'stepping out for a haircut'. Reserves the block and PUSHES the rest of today later in order, because they will not be working on what was scheduled then. Meetings and locked activities never move; any that overlap come back as conflicts — ask the user whether to skip them or shorten the activity. Work that no longer fits its time window today is returned to be rescheduled. Act immediately; do not ask first. Tell the user what moved, and that they can say undo.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "The activity, e.g. 'gym' — matched against the user's activities and their aliases" },
+          duration_min: { type: "number", description: "Override the activity's usual length (gym defaults to 120)" },
+          start_time: { type: "string", description: "HH:mm 24-hour, today. Omit for now." }
+        },
+        required: ["name"]
+      }
+    },
+    {
+      type: "function",
+      name: "undo_activity_start",
+      description: "Undo the most recent start_activity: put every moved task back where it was and remove the block.",
+      parameters: { type: "object", properties: {}, required: [] }
     },
     // ── ITINERARY TOOLS (used by Daily Review chat) ──────────────
     {
@@ -259,7 +361,7 @@ export function getToolDefinitions(): ToolDefinition[] {
     {
       type: "function",
       name: "quick_create_task",
-      description: "Create a single task quickly with optional scheduling. Use for 'I need to call John today', 'add an item to email the prof'. Prefer parse_and_create_tasks for multi-task or vague NL.",
+      description: "Create a single task quickly with optional scheduling. Use for 'I need to call John today', 'add an item to email the prof'. Prefer parse_and_create_tasks for multi-task or vague NL. NOT for activities: time the user spends being somewhere or doing a routine at a time (gym, lunch, church, a haircut appointment, a standup or 1:1, school pickup) is an ACTIVITY — use add_activity, or start_activity when they are going now. A task is work to get done (e.g. 'book a haircut' is a task; 'haircut Thursday at 11' is an activity).",
       parameters: {
         type: "object",
         properties: {
@@ -267,7 +369,7 @@ export function getToolDefinitions(): ToolDefinition[] {
           date: { type: "string", description: "Optional YYYY-MM-DD or 'today'/'tomorrow'" },
           window: { type: "string", enum: ["morning", "business_hours", "after_work", "evening"], description: "Optional preferred window — scheduler picks exact time" },
           duration_minutes: { type: "number", description: "Estimated duration. Default 30." },
-          category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION", "PROF_EDUCATION", "PERSONAL"], description: "Defaults to LIFE" },
+          category: { type: "string", enum: [...CATEGORY_KEYS], description: "Defaults to LIFE" },
           priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"], description: "Defaults to MEDIUM" },
           auto_schedule: { type: "boolean", description: "If true (default), find a slot automatically." }
         },
@@ -283,7 +385,7 @@ export function getToolDefinitions(): ToolDefinition[] {
         properties: {
           text: { 
             type: "string", 
-            description: "Natural language task description. Can include multiple tasks, dates, priorities. Example: 'I need to get a haircut, work on the Nexus application, and meet with my MBA partner'" 
+            description: "Natural language task description. Can include multiple tasks, dates, priorities. Example: 'I need to book a haircut, work on the Nexus application, and prep for my MBA partner meeting'. Leave OUT activities at a time (gym, lunch, church, an appointment, a standup or 1:1) — those go to add_activity, not here."
           },
           target_date: { 
             type: "string", 
@@ -295,6 +397,19 @@ export function getToolDefinitions(): ToolDefinition[] {
           }
         },
         required: ["text"]
+      }
+    },
+    {
+      type: "function",
+      name: "undo_dedup",
+      description: "Restore a task that the duplicate-detection guard recently SKIPPED as a likely duplicate. Use this when the user replies 'undo', 'undo that', 'add it back', 'no it's not a duplicate', or otherwise says a skipped/deduped task should be restored — typically right after you told them you skipped a duplicate. With no arguments it restores the most recent batch of skipped tasks. Do NOT use this for normal task creation or for un-completing a done task.",
+      parameters: {
+        type: "object",
+        properties: {
+          all: { type: "boolean", description: "If true, restore every skipped duplicate that hasn't been undone yet, not just the most recent batch. Default: false." },
+          log_id: { type: "string", description: "Optional id of a specific dedup-log entry to restore, when the user names a particular task." }
+        },
+        required: []
       }
     },
 
@@ -397,6 +512,40 @@ export function getToolDefinitions(): ToolDefinition[] {
           calendar: { type: "string", enum: ["outlook", "google"], description: "Which calendar to use" }
         },
         required: ["title", "start_time"]
+      }
+    },
+    {
+      type: "function",
+      name: "update_calendar_event",
+      description: "Move, retime or rename one of the user's existing Outlook or Google calendar events. Identify the event by event_id (from a calendar read or an earlier candidates list), or by match_title and/or match_start_time. If several events match, the tool returns candidates and changes nothing: ask the user which one, then call again with its event_id. If only new_start_time is given, the original duration is kept.",
+      parameters: {
+        type: "object",
+        properties: {
+          event_id: { type: "string", description: "Provider event id of the event to change" },
+          provider: { type: "string", enum: ["outlook", "google"], description: "Which calendar the event is on (needed only for an event_id not yet synced)" },
+          match_title: { type: "string", description: "Title (or part of it) of the event to change, when no event_id" },
+          match_start_time: { type: "string", description: "Current start time of the event to change, ISO 8601, when no event_id" },
+          new_start_time: { type: "string", description: "New start time, ISO 8601" },
+          new_end_time: { type: "string", description: "New end time, ISO 8601" },
+          new_title: { type: "string", description: "New title" },
+          new_location: { type: "string", description: "New location" }
+        }
+      }
+    },
+    {
+      type: "function",
+      name: "delete_calendar_event",
+      description: "Delete one of the user's Outlook or Google calendar events. ONLY call this when the user has explicitly asked, in this conversation, to delete or cancel that specific event; never on your own initiative, and never to tidy up or resolve a conflict. Set user_explicitly_requested to true only in that case; otherwise the tool refuses. If several events match, it returns candidates and deletes nothing: ask the user which one.",
+      parameters: {
+        type: "object",
+        properties: {
+          event_id: { type: "string", description: "Provider event id of the event to delete" },
+          provider: { type: "string", enum: ["outlook", "google"], description: "Which calendar the event is on (needed only for an event_id not yet synced)" },
+          match_title: { type: "string", description: "Title (or part of it) of the event to delete, when no event_id" },
+          match_start_time: { type: "string", description: "Start time of the event to delete, ISO 8601, when no event_id" },
+          user_explicitly_requested: { type: "boolean", description: "true ONLY if the user explicitly asked to delete this event in this conversation" }
+        },
+        required: ["user_explicitly_requested"]
       }
     },
     {

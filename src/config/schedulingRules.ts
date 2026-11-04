@@ -7,6 +7,10 @@
  */
 
 import { resolveKeywords } from '@/utils/resolveKeywords';
+// Activities are IMPORTED from the edge-function module, not mirrored: one implementation for the
+// schedulers, the Settings screen and the calendar view, so the three cannot disagree.
+import type { Activity } from '../../supabase/functions/_shared/activities.ts';
+export type { Activity };
 
 export interface TimeWindow {
   start: number; // hour (0-23)
@@ -50,7 +54,11 @@ export interface SchedulingConfig {
       defaultTimeWindow: string[]; // Array of allowed time windows
       defaultStatus: string;
       estimatedDuration: number; // minutes
-      maxPerDay?: number; // Optional max tasks per day for this category
+      maxPerDay?: number; // Optional max tasks per day for this category (weekdays)
+      // Optional SEPARATE weekend allowance. maxPerDay was sized for a weekday evening but
+      // was being applied to Saturday/Sunday too, where the `weekends` window is 10:00–20:00.
+      // Absent → falls back to maxPerDay, so existing saved configs behave exactly as before.
+      maxPerDayWeekend?: number;
     };
   };
   contextRules: {
@@ -69,10 +77,36 @@ export interface SchedulingConfig {
    * supabase/functions/_shared/scheduling-defaults.ts (SchedulingCaveat / activeCaveats / applyCaveats).
    */
   caveats?: SchedulingCaveat[];
+  /**
+   * Coursework WORK SESSIONS (P3, owner 2026-10-29): every dated assignment is split into
+   * session cards of `sessionMinutes`, spread from today to `finishBufferDays` before its due date.
+   * Backend contract: supabase/functions/_shared/work-sessions.ts (resolveSessionConfig).
+   */
+  assignmentSessions?: {
+    enabled: boolean;
+    finishBufferDays: number;     // finish this many days before the due date (owner: 7)
+    sessionMinutes: number;       // length of one work session (owner: 90)
+    defaultEffortMinutes: number; // total effort when Nexus gives none (owner: 180)
+    lateBufferHours: number;      // already inside the window: last session ends this long before due
+  };
+  /**
+   * Recurring / one-off / on-demand ACTIVITIES (lunch, gym, church, haircut, 1:1s) — reserved time
+   * that is never a task. UNDEFINED means "never saved", and the shared seed (lunch + gym) applies;
+   * an empty array means the owner removed them all. Never default this to [].
+   * Contract: supabase/functions/_shared/activities.ts.
+   */
+  activities?: Activity[];
+  /**
+   * How strongly a category wins a contested slot (added to the scheduler's score). Owner 2026-11-04:
+   * education outranks Ventures. Backend contract: _shared/scheduling-defaults.ts resolveCategoryWeights.
+   */
+  categoryWeights?: Record<string, number>;
 }
 
 // Default configuration blending all existing rules
 export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
+  // Seeds only: education wins a slot over other work by default (owner 2026-11-04).
+  categoryWeights: { PROF_EDUCATION: 20, EDUCATION: 20 },
   timezone: 'America/New_York', // Will be auto-detected on first use
   timeWindows: {
     morning: {
@@ -117,9 +151,24 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
     oneOffTaskRatio: 0.3,
     bufferRatio: 0.1,
   },
+  // Seeds only — every value is changeable in Settings → Scheduling → Coursework work sessions.
+  assignmentSessions: {
+    enabled: true,
+    finishBufferDays: 7,
+    sessionMinutes: 90,
+    defaultEffortMinutes: 180,
+    lateBufferHours: 1,
+  },
   categoryMappings: {
-    CAREER: {
+    // JOB = the employer's work; CAREER = getting the next role (owner 2026-11-03). Seeds only -- both rows
+    // are changeable in Settings. JOB's lane is BACKLOG because task_status has no JOB value.
+    JOB: {
       defaultTimeWindow: ['business_hours'],
+      defaultStatus: 'BACKLOG',
+      estimatedDuration: 120,
+    },
+    CAREER: {
+      defaultTimeWindow: ['after_work', 'weekends'],
       defaultStatus: 'CAREER',
       estimatedDuration: 120,
     },
@@ -127,7 +176,10 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
       defaultTimeWindow: ['after_work', 'weekends'],
       defaultStatus: 'PROF_EDUCATION',
       estimatedDuration: 90,
-      maxPerDay: 2
+      maxPerDay: 2,
+      // Seed only — changeable in Settings → Scheduling. Owner 2026-10-28: weekday 2, weekend 6
+      // (the weekends window is 10:00–20:00 and a study block is 90m, so six fit).
+      maxPerDayWeekend: 6
     },
     EDUCATION: {
       defaultTimeWindow: ['flexible'],
@@ -159,12 +211,12 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
       breakfast: ['morning', 'LIFE'],
       
       // Business hours keywords
-      meeting: ['business_hours', 'CAREER'],
-      work: ['business_hours', 'CAREER'],
-      office: ['business_hours', 'CAREER'],
-      call: ['business_hours', 'CAREER'],
+      meeting: ['business_hours', 'JOB'],
+      work: ['business_hours', 'JOB'],
+      office: ['business_hours', 'JOB'],
+      call: ['business_hours', 'JOB'],
       interview: ['business_hours', 'CAREER'],
-      review: ['business_hours', 'CAREER'],
+      review: ['business_hours', 'JOB'],
       
       // Education keywords
       study: ['business_hours', 'PROF_EDUCATION'],
@@ -206,19 +258,19 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
       
       // Financial impact keywords
       payment: ['business_hours', 'LIFE'],
-      invoice: ['business_hours', 'CAREER'],
+      invoice: ['business_hours', 'JOB'],
       bill: ['business_hours', 'LIFE'],
       tax: ['business_hours', 'LIFE'],
-      budget: ['business_hours', 'CAREER'],
-      contract: ['business_hours', 'CAREER'],
+      budget: ['business_hours', 'JOB'],
+      contract: ['business_hours', 'JOB'],
       
       // Communications / people keywords
-      email: ['business_hours', 'CAREER'],
-      follow_up: ['business_hours', 'CAREER'],
-      respond: ['business_hours', 'CAREER'],
-      reply: ['business_hours', 'CAREER'],
+      email: ['business_hours', 'JOB'],
+      follow_up: ['business_hours', 'JOB'],
+      respond: ['business_hours', 'JOB'],
+      reply: ['business_hours', 'JOB'],
       text: ['business_hours', 'LIFE'],
-      message: ['business_hours', 'CAREER'],
+      message: ['business_hours', 'JOB'],
     },
     priorityMappings: {
       urgent: 4,
@@ -232,7 +284,7 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
 1. Consider typical timing for the activity type (meals, meetings, errands, workouts, etc.)
 2. Find the NEXT AVAILABLE slot that matches natural timing patterns
 3. Avoid all user's busy times
-4. Respect category defaults (CAREER during business_hours, EDUCATION/VENTURES after_work, LIFE flexible)
+4. Respect the category windows in this config (JOB during business_hours by default, CAREER/EDUCATION/VENTURES after_work and weekends, LIFE flexible)
 5. If a suggested time is in the past or conflicted, propose the next logical occurrence
 6. ALWAYS prioritize: (a) tasks with due dates within 48 hours, (b) tasks involving people or communications (meetings, calls, emails, follow-ups), and (c) tasks with financial impact (payments, invoices, contracts). Schedule these earlier in the day and give them preference over same-priority tasks.
 
@@ -303,5 +355,12 @@ export function mergeSchedulingConfig(
     // config object explicitly, so any key it forgets is silently dropped on the next save — which
     // would wipe the owner's active caveats the moment they touched any other setting.
     caveats: Array.isArray(userConfig.caveats) ? userConfig.caveats : [],
+    // Carried for the same reason as caveats: a key this function forgets is dropped on the next save.
+    assignmentSessions: { ...DEFAULT_SCHEDULING_CONFIG.assignmentSessions!, ...(userConfig.assignmentSessions ?? {}) },
+    // Same pass-through rule: defaults under saved, so a seed applies until the owner changes it.
+    categoryWeights: { ...DEFAULT_SCHEDULING_CONFIG.categoryWeights!, ...(userConfig.categoryWeights ?? {}) },
+    // Same pass-through rule — but UNDEFINED when never saved, so the seed keeps applying and a save
+    // of an unrelated setting never writes an empty list that would erase lunch.
+    activities: Array.isArray(userConfig.activities) ? userConfig.activities : undefined,
   };
 }

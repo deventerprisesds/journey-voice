@@ -15,6 +15,13 @@ export interface TimeWindow {
  * Used by nightly-schedule-builder to split assignment candidates into
  * Tier A (deadline-critical), Tier B (urgent), Tier C (long-horizon).
  */
+// LAST-RESORT fallback only — read it through resolveCategoryDailyCap(), never directly.
+// This used to be applied as a flat hardcoded cap on every day of the week in
+// nightly-schedule-builder, which (a) the user could not change anywhere in the UI,
+// violating the standing "no behaviour-affecting value may be code-only" rule, and
+// (b) duplicated `categoryMappings[cat].maxPerDay`, which the batch/smart schedulers
+// were already enforcing from the user's own config. Two independent caps that both
+// happened to be 2, so editing Settings silently did nothing to the builder.
 export const MAX_ASSIGNMENTS_PER_DAY = 2;
 export const ASSIGNMENT_URGENT_HOURS = 48;
 export const ASSIGNMENT_PRIORITY_DAYS = 7;
@@ -24,6 +31,61 @@ export interface CategoryMapping {
   estimatedDuration: number;
   defaultStatus: string;
   maxPerDay?: number;
+  // Separate WEEKEND allowance. `maxPerDay` was written for weekdays — a weekday
+  // evening fits ~2 study blocks — but it was being applied to Saturday and Sunday
+  // too, where the `weekends` window is 10:00–20:00 (ten hours, room for six
+  // 90-minute blocks). That capped a whole weekend at the same two items as a
+  // Tuesday. Absent → falls back to maxPerDay, so existing configs are unchanged.
+  maxPerDayWeekend?: number;
+}
+
+/**
+ * THE single source of truth for "how many tasks of this category may land on this day".
+ *
+ * Every enforcement point must call this — the nightly builder's assignment cap, the
+ * batch scheduler's post-AI validation, and the smart scheduler — so that one number in
+ * Settings governs all of them. Before this existed the builder used a hardcoded
+ * constant while the other two read `categoryMappings[cat].maxPerDay`, so the caps could
+ * (and did) disagree and the UI value was partly inert.
+ *
+ * Resolution order, most specific first:
+ *   weekend day → maxPerDayWeekend ?? maxPerDay ?? MAX_ASSIGNMENTS_PER_DAY
+ *   weekday     →                     maxPerDay ?? MAX_ASSIGNMENTS_PER_DAY
+ *
+ * A configured 0 is honoured as "none allowed" (only null/undefined fall through), and a
+ * negative or non-finite value is treated as unset rather than silently blocking the day.
+ * Returns Infinity for a category with no cap anywhere, so callers can compare freely.
+ */
+export function resolveCategoryDailyCap(
+  userConfig: any,
+  category: string | null | undefined,
+  isWeekend: boolean,
+  opts?: { fallback?: number },
+): number {
+  const usable = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
+
+  const mapping =
+    (category && userConfig?.categoryMappings?.[category]) ||
+    (category && DEFAULT_CATEGORY_MAPPINGS[category]) ||
+    null;
+
+  if (!mapping) return opts?.fallback ?? Infinity;
+
+  const weekday = usable(mapping.maxPerDay);
+  const weekend = usable(mapping.maxPerDayWeekend);
+
+  const resolved = isWeekend ? (weekend ?? weekday) : weekday;
+  if (resolved !== null) return resolved;
+
+  return opts?.fallback ?? Infinity;
+}
+
+/** Sunday(0) / Saturday(6) in the given IANA timezone — not the runtime's local zone. */
+export function isWeekendInTimezone(date: Date, timezone: string): boolean {
+  const wd = new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'short' })
+    .format(date);
+  return wd === 'Sat' || wd === 'Sun';
 }
 
 export const DEFAULT_TIME_WINDOWS: Record<string, TimeWindow> = {
@@ -36,8 +98,12 @@ export const DEFAULT_TIME_WINDOWS: Record<string, TimeWindow> = {
 };
 
 export const DEFAULT_CATEGORY_MAPPINGS: Record<string, CategoryMapping> = {
-  CAREER:         { defaultTimeWindow: ['business_hours'],            estimatedDuration: 120, defaultStatus: 'CAREER' },
-  PROF_EDUCATION: { defaultTimeWindow: ['after_work', 'weekends'],    estimatedDuration: 90,  defaultStatus: 'PROF_EDUCATION', maxPerDay: 2 },
+  // JOB = the owner's employer's work; CAREER = getting the next role (owner 2026-11-03). Seeds only --
+  // both rows are changeable in Settings. JOB's lane is BACKLOG because task_status has no JOB value.
+  JOB:            { defaultTimeWindow: ['business_hours'],            estimatedDuration: 120, defaultStatus: 'BACKLOG' },
+  CAREER:         { defaultTimeWindow: ['after_work', 'weekends'],    estimatedDuration: 120, defaultStatus: 'CAREER' },
+  // maxPerDayWeekend 6: owner 2026-10-28 (weekday 2, weekend 6). Seed only — changeable in Settings.
+  PROF_EDUCATION: { defaultTimeWindow: ['after_work', 'weekends'],    estimatedDuration: 90,  defaultStatus: 'PROF_EDUCATION', maxPerDay: 2, maxPerDayWeekend: 6 },
   EDUCATION:      { defaultTimeWindow: ['flexible'],                  estimatedDuration: 90,  defaultStatus: 'EDUCATION' },
   VENTURES:       { defaultTimeWindow: ['after_work', 'weekends'],    estimatedDuration: 120, defaultStatus: 'VENTURES' },
   LIFE:           { defaultTimeWindow: ['flexible'],                  estimatedDuration: 60,  defaultStatus: 'LIFE' },
@@ -130,6 +196,22 @@ export function applyCaveats(
 /**
  * Merge user config with defaults. User config takes precedence.
  */
+/**
+ * How strongly a category wins when two tasks want the same slot (added to the candidate score).
+ * Owner 2026-11-04: "education should have heavier weight if a conflict" with Ventures. Seeds only --
+ * a saved `config.categoryWeights` value wins per category (Settings -> Category Mappings).
+ */
+export const DEFAULT_CATEGORY_WEIGHTS: Record<string, number> = { PROF_EDUCATION: 20, EDUCATION: 20 };
+
+export function resolveCategoryWeights(userConfig: any): Record<string, number> {
+  const saved = userConfig?.categoryWeights;
+  const out: Record<string, number> = { ...DEFAULT_CATEGORY_WEIGHTS };
+  if (saved && typeof saved === 'object') {
+    for (const [k, v] of Object.entries(saved)) if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
+  }
+  return out;
+}
+
 export function resolveConfig(userConfig: any): {
   timeWindows: Record<string, TimeWindow>;
   categoryMappings: Record<string, CategoryMapping>;
@@ -138,9 +220,14 @@ export function resolveConfig(userConfig: any): {
     ? userConfig.timeWindows
     : DEFAULT_TIME_WINDOWS;
 
-  const categoryMappings = (userConfig?.categoryMappings && Object.keys(userConfig.categoryMappings).length > 0)
+  // Saved rows win; a category with NO saved row falls back to its default row. This matches what the
+  // Settings screen shows (mergeSchedulingConfig spreads defaults under the saved rows). Before, a saved map
+  // replaced the defaults wholesale, so a category added later (JOB) appeared in Settings but the scheduler
+  // treated it as unmapped and placed it "anywhere today".
+  const saved = (userConfig?.categoryMappings && typeof userConfig.categoryMappings === 'object')
     ? userConfig.categoryMappings
-    : DEFAULT_CATEGORY_MAPPINGS;
+    : {};
+  const categoryMappings = { ...DEFAULT_CATEGORY_MAPPINGS, ...saved };
 
   return { timeWindows, categoryMappings };
 }

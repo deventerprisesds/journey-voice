@@ -6,6 +6,36 @@ the technical findings) and `.claude/accuracy-log.md` (wrong-first-answers).
 
 ---
 
+## ACT:activities — recurring activities (lunch, gym, church, haircut, 1:1s) + "headed to the gym" push
+
+**Asked (2026-10-27/29, owner):** sub-windows inside the time windows for repeatable activities
+(standup, direct-report 1:1, peer 1:1, LinkedIn writing, research, lunch), locked or not; a gym slot
+that pushes the day when the owner tells Iris/Flex "I'm headed to the gym"; and (2026-10-29) "a
+recurring activities concept so that things like church, gym, haircut, lunch get the same treatment
+instead of treated like a regular task when i tell the AI about them". Storage: owner chose option A
+(reserved blocks from config, never task rows).
+
+**Status: MERGED + DEPLOYED 2026-10-29 (PR #76 → main `ab9834b`), NOT yet confirmed by the owner live.**
+Deploy run 40891523934: 50 deployed / 0 failed. Deployed source read back via get_edge_function:
+execute-tool v516, batch-calendar-scheduler v503, smart-calendar-scheduler v583, nightly-schedule-builder
+v312 all contain the activities code + `_shared/activities.ts`. The CLIENT half (Settings card, week view)
+ships via Lovable publish — not observable from a session; owner may need to hit Publish.
+Verified by two independent verifier loops (loop 1 REFUTED 4 claims incl. a config-wipe → fixed in
+`8295739`; loop 2 CONFIRMED all, one LOW display gap → fixed `55f0672`; follow-ups `5f16912`).
+Evidence branches: `claude_verify-activities-reserved-time-1`, `-2`.
+
+Evidence:
+- `5b5605c` shared model `supabase/functions/_shared/activities.ts` + 17 tests
+  (`src/utils/activities.test.ts`); mutate.sh FIRED on the push wall-hop and floating-lunch guards.
+- `dd70feb` wired into nightly-schedule-builder (capacity), batch-calendar-scheduler (busy list +
+  hard post-AI overlap rejection), smart-calendar-scheduler, execute-tool find_open_slots; tools
+  add/list/update/remove/skip_activity, start_activity (push), undo_activity_start.
+- Settings card `src/components/ActivitiesSettings.tsx`; week view draws activity blocks.
+- Open: Phase 2 "research/LinkedIn blocks attract matching tasks" not built; ceremony_schedule is
+  not read through (owner's saved list is empty, so nothing would change today).
+
+---
+
 ## ACT-jv-2: PR triage pass — 5 open PRs
 
 **Asked (2026-09-21, owner):** "go ahead with the triage pass" (across all repos with open PRs).
@@ -607,3 +637,41 @@ else that is strictly backend". Labels only; URL, repos, Supabase, secrets and t
 | 2 | Email footer "Sent by Journey" → "Sent by TaskOS" | **deployed** | deventerprisesds/journey-voice#60 (990b60d); deploy run 39287074527 success; live `notification-delivery` v591 source contains "Sent by TaskOS" |
 | 3 | Android app name + widget → TaskOS | built | android-bridge-template f5e549a → TaskOS v1.0.11 (run 39288362792) |
 | 4 | Owner sees TaskOS on emails / launcher / widget | **NOT confirmed live** | — |
+
+## ACT:deploy-all-per-function — all-mode no longer silently skips everything after a failure (2026-10-27)
+Defect: the bulk deploy stopped at mcp's 413 (runs 39159443758, 40575132776). Tier 2.
+
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | Per-function all-mode with summary + fail-at-end | implemented on `claude_deploy-all-per-function` | `scripts/deploy-all-functions.sh`; test A1–A11 pass; `npm test` 329/0 |
+| 2 | Root-cause mcp 27 MB | done | `docs/qc-evidence/FIX-deploy-all-per-function.md` §2 (deno info 94 MB; build-tool binaries via mcp-js deps) |
+| 3 | mcp excluded from all-mode with printed reason, deployable by name | implemented | test A8/A9 |
+| 4 | Mutations | 6 FIRED, 1 behaviourally equivalent | evidence file §4 |
+| 5 | PR opened, not merged | open | (PR link in branch history) |
+| 6 | Seen working in a real all-mode run | **NOT confirmed** | needs the first `_shared` change after merge |
+
+### ACT:assignment-sessions-live — 2026-11-04: #78 merged + deployed, NOT yet confirmed on the owner's board
+- **Ask (owner, 2026-10-29 → 11-03):** assignments must be worked "a little at a time" as `📚 <assignment> — session N of M` cards, not one block then cram.
+- **Why it sat unshipped 5 days:** #78 went `dirty` (merge conflict) against #76/#79 Activities right after it was opened; nobody resolved it. Resolved in `873d3d2` keeping both sides, plus PASS 0 now reserves Activity time as busy (test PASS-3b, mutate.sh FIRED). Merged `0796822`.
+- **Deploy was blocked estate-wide** by the latest Supabase CLI requiring `--yes` without a TTY (run 41687535826 secret sync; run 41692583533 50/50 deploy). Fixed by #81 (workflow) + #82 (`scripts/deploy-all-functions.sh`, test A1, mutate.sh FIRED). Dispatch run 41758220778 on `8bbef70`: **success**. Live `nightly-schedule-builder` v315 contains `runWorkSessionPass` + `activityBusySlots`.
+- **Status:** implemented + deployed, mechanism verified; **NOT confirmed live** — first session cards are created by the 05:00 UTC build. Check: `select title,start_time from tasks where assignment_id like '%::session-%'`.
+
+## ACT:job-category — a JOB lane for employer work, separate from CAREER (2026-11-03 → shipped 2026-11-04)
+Owner rulings: JOB = employer work (Trinnex), business hours by default, editable in Settings; CAREER = next role;
+client work + own apps = VENTURES; Esri / Power BI / SDLC / ops decks = JOB; no start date; keywords extended
+(lane gates the window), never removed; shared category list.
+
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | VENTURES windows → evening + weekends | **live** (read back) | user_scheduling_prefs owner row |
+| 2 | Re-sort 22 CAREER tasks (19 VENTURES, 2 PROF_EDUCATION, 1 LIFE) | **live** (read back) | undo SQL in session scratchpad |
+| 3 | JOB enum value | **live** | apply_migration `task_category_job`; enum_range shows JOB |
+| 4 | Code: shared list, keyword lane gate (scheduler + QC), resolveConfig fill, category AI guide, write-path normalising, screens, Settings lane dropdown | **merged + edge fns deployed** | deventerprisesds/journey-voice#80 (7dad873); deployed ai-task-parser v608, nightly-schedule-builder v319, execute-tool v523 read back |
+| 5 | Verification | 3 independent loops; loop 3: 0 refuted | `docs/qc-evidence/VERIFY-job-category-server-{1,2,3}.md`; 17 mutations FIRED |
+| 6 | Data: 5 tasks → JOB, Company = Trinnex, JOB row, CAREER → after_work+weekends, 13 keywords → JOB, 13 name hints | **live** (read back: 5 / Trinnex / 13 / 59 keywords) | `docs/qc-evidence/ROLLOUT-job-category.sql` |
+| 7 | Huddle: Job before Career, hue 200, Cole owns JOB | **merged + SWA deploy success** | deventerpriseds-org/huddle-extension-app#130 (18778f6) |
+| 8 | journey→Huddle sync carries JOB | **verified live** (Test- task synced as JOB, deleted, 0 left; 5 owner tasks JOB in mirror) | — |
+| 9 | Scorecard on the live parser | **27/27** after the owner re-ruled E-21 (runs 1-2 were 26/27) | `docs/qc-evidence/EVAL-job-category-live-2026-11-04.md`; eval runs 41871280229, 41876505166, 41889221051 |
+| 10 | Owner sees Job tab / Settings rows / dropdowns in TaskOS; Job row in Huddle | **NOT confirmed** (Lovable deploy, owner hard-refresh needed) | — |
+| 11 | Phone widget JOB | reaches phone on next Android build | f5f17f9 |
+| 12 | Owner re-ruling 2026-11-04: SDLC work naming an own product ("SDLC doc for Sidecar") = VENTURES; unnamed SDLC = JOB | **merged + deployed**, scorecard 27/27 | deventerprisesds/journey-voice#89 (d25124e) |

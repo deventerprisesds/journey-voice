@@ -4,16 +4,21 @@ import {
   DEFAULT_TIME_WINDOWS,
   DEFAULT_CATEGORY_MAPPINGS,
   resolveConfig,
+  resolveCategoryWeights,
   activeCaveats,
   applyCaveats,
   validateTaskWindow,
   getPreferredWindows,
   withKeywordWindow,
+  resolveCategoryDailyCap,
   MAX_ASSIGNMENTS_PER_DAY,
   ASSIGNMENT_URGENT_HOURS,
   ASSIGNMENT_PRIORITY_DAYS,
 } from "../_shared/scheduling-defaults.ts";
 import { getTodayInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
+import { runWorkSessionPass } from "../_shared/work-session-pass.ts";
+import { activityBusySlots } from "../_shared/activities.ts";
+import { activeWindowNamesForDay, matchKeywordRule } from "../_shared/keyword-rules.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -131,22 +136,12 @@ function getActiveWindows(
   timeWindows: Record<string, TimeWindow>,
   targetDayOfWeek: number
 ): Record<string, { start: number; end: number; totalMinutes: number }> {
-  const isWeekend = targetDayOfWeek === 0 || targetDayOfWeek === 6;
+  // The open-window rule (incl. weekend enforcement) is shared with the daily QC check so both ask the
+  // keyword rule about the same windows -- see _shared/keyword-rules.ts activeWindowNamesForDay.
   const active: Record<string, { start: number; end: number; totalMinutes: number }> = {};
-  
-  for (const [name, win] of Object.entries(timeWindows)) {
-    if (name === 'flexible') continue; // flexible is a fallback, not a real window
-    
-    // WEEKEND ENFORCEMENT: On weekends, only allow the 'weekends' window
-    if (isWeekend && name !== 'weekends') continue;
-    // On weekdays, skip the 'weekends' window
-    if (!isWeekend && name === 'weekends') continue;
-    
-    if (!win.days || !win.days.includes(targetDayOfWeek)) continue;
-    const total = (win.end - win.start) * 60;
-    if (total > 0) {
-      active[name] = { start: win.start, end: win.end, totalMinutes: total };
-    }
+  for (const name of activeWindowNamesForDay(timeWindows, targetDayOfWeek)) {
+    const win = timeWindows[name];
+    active[name] = { start: win.start, end: win.end, totalMinutes: (win.end - win.start) * 60 };
   }
   return active;
 }
@@ -211,27 +206,13 @@ function computeUsedMinutes(
 function getKeywordWindowOverride(
   title: string,
   contextKeywords: Record<string, string[]> | undefined,
-  activeWindowNames: string[]
+  activeWindowNames: string[],
+  category?: string,
 ): { window: string; matchedKeyword: string } | null {
-  if (!contextKeywords || !title) return null;
-  const lower = title.toLowerCase();
-
-  for (const [keyword, mapping] of Object.entries(contextKeywords)) {
-    // mapping is [timeWindow, status] per schedulingRules.ts
-    if (!Array.isArray(mapping) || mapping.length === 0) continue;
-    const targetWindow = mapping[0];
-    if (!targetWindow || targetWindow === 'flexible') continue;
-
-    // Match by word boundary (and underscore→space variant for keys like "follow_up")
-    const kw = keyword.toLowerCase().replace(/_/g, ' ');
-    if (kw.length < 3) continue;
-    if (lower.includes(kw)) {
-      if (activeWindowNames.includes(targetWindow)) {
-        return { window: targetWindow, matchedKeyword: keyword };
-      }
-    }
-  }
-  return null;
+  // The rule lives in _shared/keyword-rules.ts so the daily review's QC check applies the SAME one.
+  // A keyword whose lane is a category now steers only tasks in that category (owner 2026-11-03).
+  const m = matchKeywordRule(title, contextKeywords, { category, activeWindowNames });
+  return m ? { window: m.window, matchedKeyword: m.keyword } : null;
 }
 
 serve(async (req) => {
@@ -288,6 +269,7 @@ serve(async (req) => {
       const config = userPref.config || {};
 
       const { timeWindows, categoryMappings } = resolveConfig(config);
+      const categoryWeights = resolveCategoryWeights(config);
       // Temporary caveat overlay — expired ones filtered here, so no cron is needed.
       const caveats = activeCaveats(config);
       if (caveats.length) {
@@ -418,6 +400,7 @@ serve(async (req) => {
             .eq('user_id', userId)
             .eq('is_scheduled', true)
             .not('status', 'eq', 'DONE')
+            .not('tags', 'cs', '{work-session}') // P3: the session pass owns these (keeps hand-moved ones)
             .gte('start_time', now.toISOString())
             .lt('start_time', horizonEnd.toISOString());
 
@@ -457,6 +440,7 @@ serve(async (req) => {
             .eq('user_id', userId)
             .eq('is_scheduled', true)
             .not('status', 'eq', 'DONE')
+            .not('tags', 'cs', '{work-session}') // P3: the session pass owns these
             .gte('start_time', todayStartIso)
             .lt('start_time', todayEndIso);
 
@@ -645,6 +629,34 @@ serve(async (req) => {
         }
 
         // ==========================================
+        // PASS 0: ASSIGNMENT WORK SESSIONS (P3/P4)
+        // Every open, dated assignment is planned as "session N of M" cards spread from today to its
+        // finish-by date (Settings → assignmentSessions; default 7 days before due), inside the
+        // coursework windows and the per-day cap. Runs BEFORE every other pass so required coursework
+        // is placed first; the parents and their sessions are then left out of the passes below.
+        // Single-day mode only reads (no re-plan), so "add a task for today" never moves sessions.
+        // A failure here is non-fatal: the builder falls back to its old one-block behaviour for
+        // assignments, but session cards are still kept out of the other passes.
+        // ==========================================
+        let sessionManagedIds = new Set<string>();
+        let sessionPass: Awaited<ReturnType<typeof runWorkSessionPass>> | null = null;
+        try {
+          sessionPass = await runWorkSessionPass(supabase, {
+            userId, timezone, userConfig: config, now, mode: singleDay ? 'dry' : 'apply', horizonDays: 7,
+            beforeRetime: (ts) => deleteAppOriginatedEvents(supabase, userId, ts),
+          });
+          sessionManagedIds = new Set(sessionPass.managedIds);
+          console.log(`  🧩 Work sessions: managed=${sessionPass.managedIds.length} created=${sessionPass.written.created} ` +
+            `retimed=${sessionPass.written.retimed} unscheduled=${sessionPass.written.unscheduled} ` +
+            `warning=${sessionPass.written.warningQueued}`);
+        } catch (sessErr) {
+          console.warn(`  ⚠️ Work-session pass failed (non-fatal):`, sessErr);
+          const { data: sessRows } = await supabase.from('tasks').select('id')
+            .eq('user_id', userId).like('assignment_id', '%::session-%');
+          sessionManagedIds = new Set((sessRows || []).map((r: any) => r.id));
+        }
+
+        // ==========================================
         // ASSIGNMENT TIER CLASSIFICATION (cross-horizon)
         // Split assignment-linked candidates into Tier A (≤48h, deadline-critical),
         // Tier B (3-7d or overdue ≤7d, due ASC), Tier C (>7d or overdue >7d, due DESC).
@@ -669,6 +681,7 @@ serve(async (req) => {
 
         for (const t of (allAssignmentTasks || [])) {
           if (!t.due_date) continue;
+          if (sessionManagedIds.has(t.id)) continue; // planned as work sessions in PASS 0
           const dueMs = new Date(t.due_date).getTime();
           const delta = dueMs - nowMs;
           if (delta <= urgentMs && delta >= -urgentMs) {
@@ -693,6 +706,11 @@ serve(async (req) => {
         const accumulatedBusySlots: Array<{ start_time: string; end_time: string }> = [];
         const dailyAssignmentCount: Record<string, number> = {}; // targetISO → assignment count placed
         const tierAResults = { categoryPlaced: 0, flexiblePlaced: 0, deferred: 0 };
+        // PASS 0's session blocks already use coursework capacity and calendar time.
+        for (const [day, n] of Object.entries(sessionPass?.placementsByDate ?? {})) {
+          dailyAssignmentCount[day] = (dailyAssignmentCount[day] || 0) + n;
+        }
+        if (!singleDay) accumulatedBusySlots.push(...(sessionPass?.placedBlocks ?? []));
 
         // Rolling 7-day horizon (or 1 day in single-day mode)
         const totalDays = singleDay ? 1 : 7;
@@ -911,10 +929,18 @@ serve(async (req) => {
           // Use dayBounds for proper timezone-aware filtering instead of UTC string prefix match
           const dayBusySlots = accumulatedBusySlots.filter(s => s.start_time >= dayBounds.start && s.start_time < dayBounds.end);
 
+          // Recurring activities (lunch, church, 1:1s…) are reserved time, not tasks — they take
+          // capacity exactly like a calendar event. Floating ones are placed around the day's events.
+          const dayActivityBlocks = activityBusySlots(config, dayBounds.start, dayBounds.end, timezone, dayEvents || []);
+          if (dayActivityBlocks.length) {
+            console.log(`    🧘 Activities reserved: ${dayActivityBlocks.map(b => b.name).join(', ')}`);
+          }
+
           const allScheduledItems = [
             ...(dayScheduled || []),
             ...(dayEvents || []).map(e => ({ ...e, estimate_minutes: undefined })),
             ...dayBusySlots.map(s => ({ ...s, estimate_minutes: undefined })),
+            ...dayActivityBlocks.map(b => ({ start_time: b.start_time, end_time: b.end_time, estimate_minutes: undefined })),
           ];
 
           const windowCapacities = computeUsedMinutes(allScheduledItems, activeWindows, targetISO, timezone);
@@ -960,7 +986,7 @@ serve(async (req) => {
 
           const readyIds = (readyUpNextTasks || []).map((t: any) => t.id);
           const allCandidateIds = [...new Set([...mappedIds, ...readyIds])]
-            .filter(id => !scheduledTaskIds.has(id)); // Exclude already-scheduled
+            .filter(id => !scheduledTaskIds.has(id) && !sessionManagedIds.has(id)); // Exclude already-scheduled + PASS 0's
 
           if (allCandidateIds.length === 0) {
             console.log(`    ℹ️ No candidates remaining for ${targetISO}`);
@@ -994,6 +1020,9 @@ serve(async (req) => {
             .filter(t => !scheduledTitles.has(t.title)) // Cross-day dedup by title
             .map(task => {
               let score = priorityWeight[task.priority] || 1;
+
+              // Category weight: which work wins a contested slot (owner: education over Ventures).
+              score += categoryWeights[String(task.category)] ?? 0;
               
               // Explicit user priority — base +10, rank bonus up to +5
               if ((task as any).is_priority) {
@@ -1158,22 +1187,30 @@ serve(async (req) => {
             const isAssignment = !!(task as any).assignment_id;
             const tier = isAssignment ? (assignmentTier[task.id] || 'C') : null;
             const placedAssignmentsToday = dailyAssignmentCount[targetISO] || 0;
+            // P2 (J8 shape): the cap comes from the user's Settings — weekday maxPerDay, weekend
+            // maxPerDayWeekend (falls back to maxPerDay) — never the bare constant.
+            const assignmentCapToday = resolveCategoryDailyCap(
+              config,
+              task.category,
+              targetDayOfWeek === 0 || targetDayOfWeek === 6,
+              { fallback: MAX_ASSIGNMENTS_PER_DAY },
+            );
 
-            // Pass 1B/1C cap: Tier B/C assignments are limited to MAX_ASSIGNMENTS_PER_DAY/day.
+            // Pass 1B/1C cap: Tier B/C assignments are limited to the resolved cap/day.
             // Tier A bypasses the cap (deadline-critical, pre-placed in Pass 1A).
-            if (isAssignment && tier !== 'A' && placedAssignmentsToday >= MAX_ASSIGNMENTS_PER_DAY) {
+            if (isAssignment && tier !== 'A' && placedAssignmentsToday >= assignmentCapToday) {
               deferredAssignmentsToday.push({ id: task.id, tier: tier as 'B' | 'C' });
               dayRejections.push({
                 taskId: task.id, title: task.title, category: task.category,
                 score: task.score, duration,
-                reason: `assignment_cap_${MAX_ASSIGNMENTS_PER_DAY}_per_day`,
+                reason: `assignment_cap_${assignmentCapToday}_per_day`,
                 tier,
               });
               continue;
             }
 
             // KEYWORD OVERRIDE: contextRules.keywords beats category default.
-            const keywordOverride = getKeywordWindowOverride(task.title, contextKeywords, activeWindowNames);
+            const keywordOverride = getKeywordWindowOverride(task.title, contextKeywords, activeWindowNames, task.category);
             let preferredWindows: string[];
             if (keywordOverride) {
               // Keyword window FIRST, then the category's own windows (see withKeywordWindow).
@@ -1411,8 +1448,10 @@ serve(async (req) => {
               const sMs = new Date(s.start_time).getTime();
               return sMs >= new Date(dayBounds.start).getTime() && sMs < new Date(dayBounds.end).getTime();
             });
+            // Activities take capacity here too, so the retry does not over-count free time.
+            const retryActivityBlocks = activityBusySlots(config, dayBounds.start, dayBounds.end, timezone);
             const retryCaps = computeUsedMinutes(
-              dayBusyForRetry.map(s => ({ start_time: s.start_time, end_time: s.end_time })),
+              [...dayBusyForRetry, ...retryActivityBlocks].map(s => ({ start_time: s.start_time, end_time: s.end_time })),
               activeWindows,
               targetISO,
               timezone,
@@ -1596,9 +1635,18 @@ serve(async (req) => {
             const [tY, tM, tD] = todayISO.split('-').map(Number);
             const dt = new Date(tY, tM - 1, tD + dOff);
             const isoDay = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-            if ((dailyAssignmentCount[isoDay] || 0) >= MAX_ASSIGNMENTS_PER_DAY) continue;
-
             const dow = dt.getDay();
+            // Same config-driven, weekend-aware cap as the main pass. Resolved per
+            // CATEGORY off the queue head, so a non-assignment category with its own
+            // maxPerDay is honoured here too rather than assuming PROF_EDUCATION.
+            const topUpCap = resolveCategoryDailyCap(
+              config,
+              topUpQueue[0]?.category,
+              dow === 0 || dow === 6,
+              { fallback: MAX_ASSIGNMENTS_PER_DAY },
+            );
+            if ((dailyAssignmentCount[isoDay] || 0) >= topUpCap) continue;
+
             const active = getActiveWindows(timeWindows, dow);
             const activeNames = Object.keys(active);
             if (activeNames.length === 0) continue;
@@ -1619,8 +1667,11 @@ serve(async (req) => {
             let caps = computeUsedMinutes(items, active, isoDay, timezone);
 
             for (let i = 0; i < topUpQueue.length; i++) {
-              if ((dailyAssignmentCount[isoDay] || 0) >= MAX_ASSIGNMENTS_PER_DAY) break;
               const task = topUpQueue[i];
+              // Re-resolve per task: the queue mixes categories, and the cap is per-category.
+              if ((dailyAssignmentCount[isoDay] || 0) >= resolveCategoryDailyCap(
+                    config, task.category, dow === 0 || dow === 6,
+                    { fallback: MAX_ASSIGNMENTS_PER_DAY })) break;
               const duration = task.estimate_minutes || categoryMappings[task.category]?.estimatedDuration || 60;
               const preferred = getPreferredWindows(task.category, categoryMappings, activeNames);
               const fits = preferred.some(w => (caps[w]?.remainingMinutes || 0) >= duration);
@@ -1761,6 +1812,7 @@ serve(async (req) => {
             topUpPlaced,
             dailyAssignmentCount,
           },
+          workSessions: sessionPass?.summary ?? null,
         };
 
       } catch (userError) {

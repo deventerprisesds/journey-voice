@@ -1,5 +1,5 @@
 # Project Memory — journey-voice
-Last updated: 2026-10-15
+Last updated: 2026-10-27
 
 > **MOVE THE DATE ABOVE IN THE SAME COMMIT THAT APPENDS A SECTION.** It read `2026-09-21` while
 > this file already carried sections dated 2026-10-08 and 2026-10-12 — three weeks of the header
@@ -11,6 +11,65 @@ Last updated: 2026-10-15
 > convenience and is structurally the most likely thing here to be stale — so it is the one to
 > distrust, never the sections. `actions.md` has no file-level stamp at all, deliberately, for
 > the same reason: its ACT entries each carry their own date.
+
+## JOB category, Phase 1 — SHIPPED 2026-11-04 (#80 + #86 merged, edge fns deployed, data applied; owner NOT yet confirmed in the app)
+Owner accepted a role at Trinnex. **JOB** = employer work (business hours by default); **CAREER** = next role
+(after work + weekends); client work and own apps = **VENTURES**; SDLC / ops decks / ops diagrams / Esri / Power BI =
+JOB. No employment start date (owner: "a moot point, stop applying that logic").
+- **One category list**: `supabase/functions/_shared/categories.ts` (JOB directly before CAREER). LIFE's label is
+  **Life** — the #35 swap to "Personal" was reverted by #40 (7401f71); the "LIFE vs PERSONAL" section below
+  describes the pre-revert state.
+- **Keyword lanes gate keyword windows**: `_shared/keyword-rules.ts`, used by the nightly scheduler AND the daily
+  QC. A lane that is not a category (e.g. `flexible`) applies to all. PERSONAL counts as LIFE, EDUCATION as
+  PROF_EDUCATION for this rule only. `schedulingService.extractSchedulingContext` (uncategorised tasks) left as is.
+- **Name hints** = keyword rows with window Flexible + a category lane: the category AI reads them, the scheduler
+  skips them. Employer name comes from `profiles.company`.
+- **resolveConfig now fills missing categories from defaults** (saved rows still win) — without this JOB showed in
+  Settings but the scheduler placed it anywhere.
+- **Scorecard** must run off-box (`eval-job-category.yml`): this session's proxy refuses the project host (CONNECT
+  403), and `npm ci` cannot run here (149 lockfile entries resolve to europe-west1-npm.pkg.dev, refused) — use
+  `npm install --package-lock=false --ignore-scripts` for local typechecks, never commit the lock change.
+- Huddle side: deventerpriseds-org/huddle-extension-app#130 (hue 200, "Job" before Career, cole-blake owns JOB).
+- Phone widget list gains JOB in `public/bridge.config.json` (f5f17f9) — only reaches the phone on the next APK build.
+- Status: live. Scorecard 26/27 (E-21 SDLC+product name is 2/3). journey screens ship via Lovable — owner must hard-refresh to confirm.
+
+## Activities — reserved time that is NOT a task (2026-10-29, MERGED #76 `ab9834b`, edge fns DEPLOYED; owner not yet confirmed live)
+
+- **undef-check trap:** its import regex `import\s+([^;]*?)\s+from` stops at the FIRST "from", so an
+  imported name starting with `from` (e.g. `fromMinutes`) makes it misread the whole import line and
+  report every name in it as undefined. Hence `minutesToHHMM`.
+- **Every settings writer must REFUSE on a failed read** (`readActivityPrefs`, `readCaveats`): writers
+  save `{...config, key}`, so `{}` after a read error wipes timeWindows/categoryMappings/caveats/activities.
+
+- **Contract:** `supabase/functions/_shared/activities.ts`. Stored at `user_scheduling_prefs.config.activities`.
+  `undefined` = never saved → seed applies (Lunch floating 11:30–13:30 weekdays, length =
+  `workingHours.breakMinutes`; Gym on-demand 120 min, pushes the day). `[]` = owner removed all. Never
+  default it to `[]` (client `mergeSchedulingConfig` carries it as `undefined` when absent for this reason).
+- **Busy time had exactly two sources before this** (scheduled `tasks` + `external_calendar_events`);
+  activities are the third, expanded by `activityBusySlots()` in all four readers: nightly capacity,
+  batch busy list AND its hard post-AI overlap rejection (`OVERLAPS_ACTIVITY`), smart scheduler prompt,
+  execute-tool `findOpenSlots` (so `move_task_to_day` too). A fifth reader must call the same function.
+- **The app imports the edge module directly** (`../../supabase/functions/_shared/activities.ts`;
+  `allowImportingTsExtensions` is on) — no client mirror to drift.
+- **start_activity (gym push):** writes the block as a `one_off` activity for today, shifts displaced
+  tasks via `planPush` (meetings + locked activities never move → conflicts), unschedules what passes
+  its category's latest window end, saves `config.lastActivityStart` for `undo_activity_start`.
+  Past one-offs are pruned on every write.
+- **deno.land is denied by this sandbox's egress** — `deno check` cannot run here; CI's
+  `parse-edge-functions.yml` uses `deno fmt --check` (parse only) for the same reason.
+
+## Edge deploy all-mode: one call per function; `mcp` excluded (2026-10-27, branch claude_deploy-all-per-function, NOT merged)
+- **The trap:** all-mode (any `_shared` change, or dispatch `all`) used to be ONE bulk `supabase functions deploy`.
+  It stops at the first failure. `mcp` bundles to 27 MB → HTTP 413, so runs 39159443758 (10-18) and 40575132776
+  (10-27) deployed agenda-manager…manage-push-subscription and NEVER attempted anything after `mcp`.
+- **Fix (on the branch):** `scripts/deploy-all-functions.sh` deploys per folder, keeps going, prints a table, and
+  fails at the END. `DEPLOY_ALL_EXCLUDE` in the step defaults to `mcp: <reason>`. Tested by
+  `scripts/deploy-all-functions.test.mjs` (stub `supabase`); evidence `docs/qc-evidence/FIX-deploy-all-per-function.md`.
+- **Why mcp is 27 MB (deno info, 94 MB graph):** `@lovable.dev/mcp-js@0.20.0` declares `esbuild` as a dep and
+  `vite >=5 <9` as a peer. Deno resolves vite 8 → rolldown + lightningcss native binaries. The duplicate imports
+  are NOT a cause. `supabase/functions/mcp/index.ts` is generated by the Lovable Vite plugin, so do not hand-edit it.
+  Live `mcp` is v168 (2026-07-09), and showed 0 requests in the last 24h.
+- `mode=list` still aborts on its first failure (unchanged by request).
 
 ## App name is TaskOS (2026-10-19) — labels only
 Owner chose **TaskOS**. Only what a person sees changes; `journey-voice.lovable.app`, repo names,
@@ -706,3 +765,16 @@ order is seeder-first, delete-second.
   change that sends new body fields (an old Huddle route ignores `window` and would run an hour-derived
   edition, e.g. 5pm -> the EVENING edition, pre-empting the 8pm brief).
 - The live email relay (Cloudflare worker /notify) is now on main (#55); never deploy it from a side branch.
+
+## Hardening — 2026-11-04
+- **The Supabase CLI is installed at `latest`; a 2026-11 release made `secrets set` and `functions deploy` refuse to run without a TTY unless `--yes`.** Every CLI call in CI must pass `--yes` — including the one inside `scripts/deploy-all-functions.sh`, which mode=all uses instead of the workflow's own lines (missed once: #81 fixed the workflow, #82 the script).
+- **A workflow-only change to `deploy-supabase-functions.yml` does not trigger a deploy** (`paths: supabase/functions/**`); dispatch with `function_name: all` from `main` afterwards.
+- **An open PR can silently go `dirty` and strand approved work for days.** #78 (work sessions) sat conflicted 10-29 → 11-03 while the owner believed it shipped. Read `mergeable_state` of any open PR carrying approved work before reporting status.
+
+## Hardening 2026-11-03 — keyword rules ignored their own lane field
+`contextRules.keywords` is `{keyword: [timeWindow, lane]}` and Settings edits both, but
+`nightly-schedule-builder` (`getKeywordWindowOverride`) and `dailyReviewPipeline` QC read ONLY `mapping[0]`, by
+plain substring, and put that window FIRST for every category. So "Work on Nexus application" (VENTURES) is pulled to
+business_hours by the "work" keyword, and because jsonb stores keys shortest-first, "work" is tested before
+"workout"/"homework". Owner's direction: EXTEND (lane gates the window), never remove keywords. Also: do not
+reintroduce an employment start date into the JOB design — owner ruled it moot.
