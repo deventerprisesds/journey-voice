@@ -106,7 +106,7 @@ Observation (code, execute-tool/index.ts):
 - **Gap:** an `update_task` call whose ONLY field is an unrecognised category (the most likely shape: "file it under
   side hustle") leaves `updateData` empty and returns at the pre-existing guard
   `if (!Object.keys(updateData).length) return { success: false, error: "No updatable fields provided" }`
-  (~1005) BEFORE the `categoryKept` message is built. So the response does NOT say the category was unrecognised;
+  (line 1016) BEFORE the `categoryKept` message (lines 1038-1040) is built. So the response does NOT say the category was unrecognised;
   the caller sees a generic failure. The task is untouched (safe), the warn is logged. Fix belongs at that guard.
   Not runtime-probed: execute-tool imports Deno URL modules and `updateTask` is not exported; verdict is from
   the code path above.
@@ -123,3 +123,48 @@ a thrown error is caught and warned; the parse continues with `employer=null`, `
 (`raw.trim() === ''`). Probe 2 above: `Email the team` with category `''` is flagged against `email`'s
 business_hours window exactly as an uncategorised task; test `Q-4` passes in the 501.
 
+### Reduced-depth re-checks (diff hunk re-read + suite + one probe each)
+
+| claim | probe | verdict |
+|---|---|---|
+| C1 shared list; exact name maps to itself first | `CATEGORY_KEYS` = LIFE,JOB,CAREER,VENTURES,EDUCATION,PROF_EDUCATION,PERSONAL; every key: `normalizeCategory(k)===k` and `toCategoryKey(k.toLowerCase())===k` -> true; `recognizeCategory` returns `toCategoryKey` before any synonym rule | **CONFIRMED** |
+| C3 resolveConfig fills missing categories | owner's live saved `categoryMappings` (no JOB row) -> `JOB` = `{business_hours, 120, BACKLOG}`, saved `CAREER` kept `["business_hours","weekends"]`; `resolveConfig(null)` CAREER = `["after_work","weekends"]` | **CONFIRMED** |
+| C4 13 keywords to JOB, interview stays CAREER, none removed | live SELECT: all 13 listed keys hold lane CAREER now (13/13 predicate hits), `interview` not in the list; step 4 is `jsonb_set` on element `1` only, gated on `->>1='CAREER'` (no key created or deleted) | **CONFIRMED** (not applied live -- rollout pending) |
+| C5 parser guide | `ai-task-parser`: one `profiles` read + one `user_scheduling_prefs` read in one `Promise.all`; output `normalizeCategory(rawTask.category)` with a log on change; `categoryHintsFromKeywords` on a live-shaped map keeps only flexible rows with a category lane (`appointment`->LIFE, `trinnex`->JOB, `huddle`->VENTURES; `work` and `morning` excluded); guide renders with and without employer; esbuild parses the file (template literal valid) | **CONFIRMED** |
+| C6 write paths normalise | execute-tool `createTask` and `parseAndCreateTasks` use `normalizeCategory`; RealtimeVoiceAssistant imports the shared `normalizeCategory` (line 7) for create (1628) and update (1737) | **CONFIRMED** |
+| C7 tool enums from CATEGORY_KEYS | runtime `getToolDefinitions()`: 3 category `enum`s, all `LIFE,JOB,CAREER,VENTURES,EDUCATION,PROF_EDUCATION,PERSONAL`; the `categories` array description is built from `CATEGORY_KEYS.join` | **CONFIRMED** |
+| C8 migration + types.ts | migration is only `ALTER TYPE public.task_category ADD VALUE IF NOT EXISTS 'JOB'`; `types.ts` adds `"JOB"` to the union and the Constants array; live enum still lacks JOB (expected until rollout); `tsc -p tsconfig.app.json`: 27 errors, none about category/JOB (status-union `IN_REVIEW` errors and unrelated files) -- `src/types/task.ts` accepts JOB via the shared `TaskCategory` | **CONFIRMED** |
+| C9 suite and mutations | 501/0; M-3..M-6 FIRED this loop; M-7 INERT -> G-1 | **CONFIRMED** (with G-1) |
+
+### Radius challenge
+
+- Inside the radius and checked: `getActiveWindows` (21/21 identical on live configs), both callers of
+  `matchKeywordRule`, both execute-tool category paths, the parser, notification-scheduler.
+- Outside the stated radius, checked because they import the shared module: smart-calendar-scheduler (JOB row in
+  its rebuilt mapping at line 325; file parses) and RealtimeVoiceAssistant (shared normaliser).
+- Not reached: smart-calendar-scheduler runtime behaviour with a JOB task (nothing here can run it).
+
+### Regressions (golden path)
+
+**NOT REACHED**, outside this scope: this is server/rules code in journey-voice that is not deployed (rollout
+pending), so there is no deployed build of cf9f680 to drive. The executive-engine SWA URL in the verifier
+playbook is a different app. Regression coverage this loop is the full 501-test suite plus the symbols guard.
+
+## Findings this loop
+
+| id | severity | finding |
+|---|---|---|
+| G-1 | medium (guard gap) | The QC call site's `activeWindowNames` wiring is unguarded: M-7 (`activeWindowNames: undefined`) brings back D-3 and the full suite stays green |
+| L2-1 | low | `update_task` with ONLY an unrecognised category returns `No updatable fields provided` (line 1016) and never the "is not a category, stays X" message, so D-4's "response says so" fails on that path |
+| L2-2 | low, unreachable today | `activeWindowNamesForDay` reads a missing `start` as 0, so a `{end, days}` window with no start now opens with `totalMinutes: NaN`; the old builder dropped it |
+| L2-3 | low | rollout steps 1-2 are not gated on pre-rollout values; a re-run after the owner re-files one of the five tasks would move it back to JOB |
+
+## Verdict
+
+CONFIRMED: C1, C2/D-3, C3, C4, C5, C6, C7, C8, C9, D-1, D-2, D-6, D-7, N-1, Q-4 (15)
+REFUTED: D-4 (narrow: the response message on the category-only update path) (1)
+NOT REACHED: golden-path UI regression (not deployed; out of scope)
+
+Required before done:
+- L2-1: build the categoryKept message before the empty-updateData guard (or return it from that guard).
+- G-1: assert the QC call passes `activeWindowNamesOn(...)`, or add a behavioural Saturday test of the QC step.
