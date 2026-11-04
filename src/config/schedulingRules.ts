@@ -59,6 +59,9 @@ export interface SchedulingConfig {
       // was being applied to Saturday/Sunday too, where the `weekends` window is 10:00–20:00.
       // Absent → falls back to maxPerDay, so existing saved configs behave exactly as before.
       maxPerDayWeekend?: number;
+      // Owner 2026-11-04 (option C): may a title keyword move this category's tasks OUTSIDE the windows
+      // above? Absent = yes (the behaviour before). Contract: _shared/keyword-rules.ts rule 5.
+      keywordsCanLeaveWindows?: boolean;
     };
   };
   contextRules: {
