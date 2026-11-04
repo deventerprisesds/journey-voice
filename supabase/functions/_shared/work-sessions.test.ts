@@ -92,7 +92,17 @@ describe('P3 work-session planner', () => {
     const dates = p.creates.map((c) => c.placement.date);
     assert.ok(dates.every((d) => d <= '2026-12-02'), dates.join(','));
     assert.equal(new Set(dates).size, 2);
-    assert.ok(dates[0] === '2026-10-29', 'spreading starts today');
+    // Owner 2026-11-04: spread, don't front-load. First session inside this week's calendar horizon
+    // (still progresses now) but NOT tonight; the second near the centre of the rest of the window.
+    const sorted = [...dates].sort();
+    assert.ok(sorted[0] > '2026-10-29' && sorted[0] <= '2026-11-04', `first session this week, not today: ${sorted[0]}`);
+    assert.ok(sorted[1] >= '2026-11-18', `second session spread later, not the next day: ${sorted[1]}`);
+  });
+
+  it('AC-P3-1c late work still front-loads (no slack left): first session is today', () => {
+    const late = parent({ due_date: '2026-11-01T04:59:59Z' }); // due Sat Oct 31 23:59 ET, finish-by already past
+    const dates = run({ parents: [late] }).creates.map((c) => c.placement.date).sort();
+    assert.equal(dates[0], '2026-10-29');
   });
 
   it('AC-P3-1b 300 min → 4 sessions spread across the window (not bunched), one per day', () => {
@@ -116,13 +126,16 @@ describe('P3 work-session planner', () => {
   it('AC-P3-3 a missed session is re-placed on a later day next night — same card, no duplicate, N unchanged', () => {
     const night1 = run();
     let rows = applied(night1);
-    const first = rows.find((s) => s.scheduling_context?.session?.planned_date === '2026-10-29')!;
+    const firstDate = rows.map((s) => s.scheduling_context?.session?.planned_date).sort()[0];
+    assert.ok(firstDate <= '2026-11-04', 'first session inside the horizon');
+    const first = rows.find((s) => s.scheduling_context?.session?.planned_date === firstDate)!;
     // builder STEP 1 rollover clears the past, not-done block
     Object.assign(first, { start_time: null, end_time: null });
-    const night2 = run({ sessions: rows, now: new Date('2026-10-30T05:00:00Z'), days: days('2026-10-30', 60) });
+    const nextNight = new Date(Date.parse(`${firstDate}T05:00:00Z`) + 86400000);
+    const night2 = run({ sessions: rows, now: nextNight, days: days(nextNight.toISOString().slice(0, 10), 60) });
     assert.equal(night2.creates.length, 0, 'no duplicate card');
     const moved = night2.retimes.find((r) => r.taskId === first.id)!;
-    assert.ok(moved.placement.date >= '2026-10-30', 'never on a past day');
+    assert.ok(moved.placement.date > firstDate, 'never on a past day');
     assert.equal(night2.assignments[0].totalSessions, 2);
   });
 
@@ -217,7 +230,8 @@ describe('P3 work-session planner', () => {
     const later = p.creates.filter((c) => c.placement.date > '2026-11-04');
     assert.ok(later.length >= 1);
     for (const c of later) { assert.equal(c.placement.start, null); assert.equal(c.insert.is_scheduled, false); }
-    assert.deepEqual(Object.keys(p.placementsByDate), ['2026-10-29']);
+    const inH = p.creates.filter((c) => c.placement.date <= '2026-11-04');
+    assert.deepEqual(Object.keys(p.placementsByDate), inH.map((c) => c.placement.date));
   });
 
   it('AC-P3-8 no two sessions of one assignment on the same day while free days remain', () => {
@@ -261,7 +275,9 @@ describe('P3 work-session planner', () => {
 
   it('AC-P3-12 session cards: own card per session, titled "session N of M", linked by key, tagged, no due date', () => {
     const c = run().creates[0];
-    assert.equal(c.title, '📚 Research Paper — session 1 of 2');
+    assert.equal(c.title, '📚 Research Paper 1 of 2', 'no course code on the fixture → no suffix');
+    const withCourse = run({ parents: [parent({ scheduling_context: { source: 'MGT-782' } })] }).creates[0];
+    assert.equal(withCourse.title, '📚 Research Paper 1 of 2 (MGT-782)', 'owner 2026-11-04: course as suffix');
     assert.equal(c.insert.assignment_id, '6616bef3-cddb-49b1-b619-d83e660951f8::session-1');
     assert.deepEqual(c.insert.tags, [SESSION_TAG]);
     assert.equal(c.insert.due_date, null);
