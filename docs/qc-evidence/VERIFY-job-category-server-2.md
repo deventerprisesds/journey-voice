@@ -75,3 +75,51 @@ idempotent" is true only in the narrow sense. Low; L2-3.
 Live state: enum still `{LIFE,CAREER,VENTURES,EDUCATION,PROF_EDUCATION,PERSONAL}`; the five ids exist (2 CAREER,
 3 VENTURES); `profiles.company` null -- all pre-rollout, as expected.
 
+### D-7 -- W-1/W-2 guard the category wiring in both callers -- **CONFIRMED** (plus one unguarded line, G-1)
+
+`scripts/mutate.sh`, test cmd `npm test`, each restored and asserted against HEAD:
+
+| # | file | mutation | must-fail | result |
+|---|---|---|---|---|
+| M-3 | nightly-schedule-builder/index.ts | drop `task.category` from `getKeywordWindowOverride(...)` call | W-1 | **FIRED** (loop 1: INERT) |
+| M-4 | src/utils/dailyReviewPipeline.ts | delete `category: task.category,` from the QC call | W-2 | **FIRED** (loop 1: INERT) |
+| M-5 | src/utils/dailyReviewPipeline.ts | `activeWindowNamesOn` returns `undefined` instead of `activeWindowNamesForDay(...)` | W-2 | **FIRED** |
+| M-6 | nightly-schedule-builder/index.ts | `matchKeywordRule(title, contextKeywords, { activeWindowNames })` (category dropped inside the wrapper) | W-1 | **FIRED** |
+| M-7 | src/utils/dailyReviewPipeline.ts | `activeWindowNames: activeWindowNamesOn(...)` -> `activeWindowNames: undefined` at the QC call | W-2 | **INERT** -- full suite green |
+
+**G-1 (new, medium -- guard gap, not a product defect today):** M-7 reinstates exactly the loop-1 D-3 defect
+(QC stops asking about the day's open windows) and nothing fails. It is not equivalent: with no open-window
+list, Saturday 15:00 `Family dinner` matches `dinner`->evening (jsonb order: `dinner` < `family`, both length 6)
+against scheduled business_hours and is flagged -- the false warning D-3 fixed. W-2 asserts the helper's body
+and the `category:` line, but not that the helper is the value passed at the call site.
+
+### D-4 -- update_task / batch_update_tasks keep the current category on an unrecognised value -- **REFUTED (narrow, low)**
+
+Observation (code, execute-tool/index.ts):
+- update path (`updateTask`, ~987-996): `recognizeCategory(args.category)`; null -> no `updateData.category`,
+  `console.warn('[UPDATE_TASK] category ... kept the current one')`, `categoryKept` set; on success the result
+  carries `category_not_changed` and the message `(category "X" is not a category, so it stays <current>)`. Data
+  safety and logging: as claimed.
+- batch path (~1064-1068): `recognizeCategory(u.category)`; null -> field omitted + `console.warn('[BATCH_UPDATE] ...')`;
+  an entry whose only field was that category returns `no fields to update` in `failed`. As claimed (the claim
+  does not promise a batch message).
+- **Gap:** an `update_task` call whose ONLY field is an unrecognised category (the most likely shape: "file it under
+  side hustle") leaves `updateData` empty and returns at the pre-existing guard
+  `if (!Object.keys(updateData).length) return { success: false, error: "No updatable fields provided" }`
+  (~1005) BEFORE the `categoryKept` message is built. So the response does NOT say the category was unrecognised;
+  the caller sees a generic failure. The task is untouched (safe), the warn is logged. Fix belongs at that guard.
+  Not runtime-probed: execute-tool imports Deno URL modules and `updateTask` is not exported; verdict is from
+  the code path above.
+
+### N-1 -- parser logs the supabase `{error}` -- **CONFIRMED**
+
+`ai-task-parser/index.ts`: both reads destructure `error` (`profileErr`, `prefsErr`) and
+`console.warn('⚠️ Category context read failed; parsing without it:', profileErr?.message, prefsErr?.message)`;
+a thrown error is caught and warned; the parse continues with `employer=null`, `hints=[]`.
+
+### Q-4 -- empty-string category is ungated -- **CONFIRMED**
+
+`matchKeywordRule` gates on `toCategoryKey(opts.category) !== null`, and `toCategoryKey('')` returns null
+(`raw.trim() === ''`). Probe 2 above: `Email the team` with category `''` is flagged against `email`'s
+business_hours window exactly as an uncategorised task; test `Q-4` passes in the 501.
+
