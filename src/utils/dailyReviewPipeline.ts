@@ -12,7 +12,7 @@ import { scoreSchedulingCandidate } from '@/lib/schedulingCandidates';
 import { getTimePartsInTimezone } from '@/lib/date';
 import { Task, ExternalCalendarEvent } from '@/types/task';
 import { logActivity } from '@/utils/activityLogger';
-import { activeWindowNamesForDay, matchKeywordRule } from '../../supabase/functions/_shared/keyword-rules.ts';
+import { activeWindowNamesForDay, categoryKeywordLimit, matchKeywordRule } from '../../supabase/functions/_shared/keyword-rules.ts';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -514,6 +514,7 @@ export function buildDailyReviewReasoning(
           const match = matchKeywordRule(task.title, keywords, {
             category: task.category,
             activeWindowNames: activeWindowNamesOn(task.start_time, tz, config.timeWindows),
+            ...categoryKeywordLimit(task.category, (config as any).categoryMappings),
           });
           if (match && match.window !== scheduledWindow) {
             violations.push({

@@ -17,6 +17,9 @@
 //   3. NEW: if the lane names a real category and the task's category is a different one, skip it and KEEP
 //      SCANNING. A lane that is not a category ('flexible', a status, empty) applies to every task, as before.
 //   4. As before, the window must be open today (when the caller knows today's windows); otherwise keep scanning.
+//   5. NEW (owner 2026-11-04, option C): when the caller says this category does NOT let keywords leave its
+//      windows (`keywordsCanLeaveWindows: false` on the category), a keyword whose window is not one of the
+//      category's own windows is skipped and scanning continues. Absent = allowed = the behaviour before.
 // A task whose category is unknown (undefined/null) is not gated at all, so callers that never knew the
 // category behave exactly as they did.
 //
@@ -25,6 +28,19 @@
 // their keyword maps in that order (see keyword-rules.test.ts).
 
 import { laneCoversCategory, toCategoryKey } from './categories.ts';
+
+/**
+ * Rule 5's inputs for one task's category, from the owner's category map: its listed windows and whether
+ * keywords may move its tasks outside them. Missing flag = true (keywords may), the behaviour before.
+ */
+export function categoryKeywordLimit(
+  category: unknown,
+  categoryMappings: Record<string, { defaultTimeWindow?: string[]; keywordsCanLeaveWindows?: boolean }> | null | undefined,
+): { categoryWindows?: string[]; keywordsCanLeaveWindows: boolean } {
+  const m = categoryMappings && typeof category === 'string' ? categoryMappings[category] : undefined;
+  if (!m) return { keywordsCanLeaveWindows: true };
+  return { categoryWindows: m.defaultTimeWindow ?? [], keywordsCanLeaveWindows: m.keywordsCanLeaveWindows !== false };
+}
 
 export interface KeywordMatch {
   keyword: string;
@@ -36,7 +52,13 @@ export interface KeywordMatch {
 export function matchKeywordRule(
   title: string | null | undefined,
   keywords: Record<string, unknown> | null | undefined,
-  opts: { category?: unknown; activeWindowNames?: readonly string[] } = {},
+  opts: {
+    category?: unknown;
+    activeWindowNames?: readonly string[];
+    /** Rule 5: the category's own windows, and whether keywords may go outside them (default true). */
+    categoryWindows?: readonly string[];
+    keywordsCanLeaveWindows?: boolean;
+  } = {},
 ): KeywordMatch | null {
   if (!keywords || !title) return null;
   const lower = title.toLowerCase();
@@ -56,6 +78,9 @@ export function matchKeywordRule(
     if (gated && lane && !laneCoversCategory(lane, opts.category)) continue;
 
     if (opts.activeWindowNames && !opts.activeWindowNames.includes(window)) continue;
+
+    if (opts.keywordsCanLeaveWindows === false && opts.categoryWindows
+      && !opts.categoryWindows.includes('flexible') && !opts.categoryWindows.includes(window)) continue;
 
     return { keyword, window, lane };
   }
