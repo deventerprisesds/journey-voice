@@ -671,7 +671,8 @@ never removed; keep everything editable in Settings; shared category list "a go 
 | 4b | Owner to confirm the slimmed Phase 1 scope (scope grew in the AC pass) | **asked, open** | — |
 | 5 | Owner go-ahead for Phase 1 ("go ahead and build phase 1 until done", 2026-11-04) | **given** | — |
 | 5a | Server/rules half: shared category list, keyword lane gate (scheduler + QC), resolveConfig fill, JOB/CAREER defaults, 13 keyword defaults → JOB, category AI guide (employer + name hints), write-path normalising, tool enums, migration | **implemented** on the branch; `npm test` 490/0; 9 mutations FIRED | d31aef1..52c759f; independent verifier running |
-| 5b | Screens: JOB on every list/style map, Job board tab before Career, Settings keyword lane dropdown | in progress (helper, own worktree, branch `claude_job-screens`) | — |
+| 5b | Screens: JOB on every list/style map, Job board tab before Career, Settings keyword lane dropdown | **implemented, merged into the PR branch** (497 tests, tsc 27 = base, vite build ok, type-guard mutation FIRED) | 1b16529; `docs/qc-evidence/IMPL-job-screens.md` |
+| 5g | Verifier loop 1 findings D-1..D-5, N-1 | D-1..D-4 + N-1 **fixed** (4 more mutations FIRED); D-5 = apply the migration BEFORE merging (rollout order) | e3d7a38, b52af51, ffbdb8d; `VERIFY-job-category-server-1` on branch `claude_verify-job-category-server` |
 | 5c | Huddle: JOB hue, label, order, Cole owns JOB, tool descriptions | **implemented, PR open** (tests green, tsc 0) | deventerpriseds-org/huddle-extension-app#130 |
 | 5f | Phone priorities widget lists JOB | **committed**; reaches the phone only on the next Android build | f5f17f9 |
 | 5d | Scorecard (27 titles on the live parser) | script + manual workflow committed; runs after deploy (session network cannot reach the project host) | `scripts/eval-job-category.mjs`, `.github/workflows/eval-job-category.yml` |
