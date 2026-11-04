@@ -23,12 +23,17 @@ UPDATE public.profiles SET company = 'Trinnex'
  WHERE user_id = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1';
 
 -- 3. Saved category rows: JOB = business hours; CAREER = after work + weekends. Other rows untouched.
+--    Each write fires only while the row still holds its PRE-rollout value, so a re-run, or an owner edit
+--    made in Settings after the first run, is never overwritten (verifier finding D-6).
 UPDATE public.user_scheduling_prefs
-   SET config = jsonb_set(
-                  jsonb_set(config, '{categoryMappings,JOB}',
-                            '{"defaultTimeWindow":["business_hours"],"defaultStatus":"BACKLOG","estimatedDuration":120}'::jsonb, true),
-                  '{categoryMappings,CAREER,defaultTimeWindow}', '["after_work","weekends"]'::jsonb)
- WHERE user_id = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1';
+   SET config = jsonb_set(config, '{categoryMappings,JOB}',
+                          '{"defaultTimeWindow":["business_hours"],"defaultStatus":"BACKLOG","estimatedDuration":120}'::jsonb, true)
+ WHERE user_id = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1'
+   AND NOT (config->'categoryMappings' ? 'JOB');
+UPDATE public.user_scheduling_prefs
+   SET config = jsonb_set(config, '{categoryMappings,CAREER,defaultTimeWindow}', '["after_work","weekends"]'::jsonb)
+ WHERE user_id = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1'
+   AND config->'categoryMappings'->'CAREER'->'defaultTimeWindow' = '["business_hours","weekends"]'::jsonb;
 
 -- 4. The 13 work keywords point at JOB. Window unchanged; only the lane (element 1) changes; a key the owner
 --    has deleted is not re-created (the WHERE on ? skips it).
@@ -40,7 +45,7 @@ BEGIN
     UPDATE public.user_scheduling_prefs
        SET config = jsonb_set(config, ARRAY['contextRules','keywords',k,'1'], '"JOB"'::jsonb)
      WHERE user_id = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1'
-       AND config->'contextRules'->'keywords' ? k;
+       AND config->'contextRules'->'keywords'->k->>1 = 'CAREER';   -- only the pre-rollout lane; an owner edit stays
   END LOOP;
 END $$;
 

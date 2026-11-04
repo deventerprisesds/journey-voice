@@ -148,3 +148,21 @@ describe('activeWindowNamesForDay (shared by scheduler and QC)', () => {
     assert.equal(pick('Email the team', 'NOT_A_CATEGORY', AFTER), 'email->business_hours');
   });
 });
+
+// ── Wiring (verifier finding D-7, loop 1) ────────────────────────────────────────────────────────────────
+// The rule is only as good as its callers: dropping the category from either call silently ungates every
+// keyword again. Both callers live in files this runner cannot import (Deno URL imports / the app's @ alias),
+// so assert on their source, the same way scheduling-caps.test.ts guards the builder's weekend rule.
+const SCHEDULER_SRC = readFileSync(new URL('../nightly-schedule-builder/index.ts', import.meta.url), 'utf8');
+const QC_SRC = readFileSync(new URL('../../../src/utils/dailyReviewPipeline.ts', import.meta.url), 'utf8');
+
+describe('both callers pass the task category into the shared rule', () => {
+  it('W-1 the nightly scheduler passes task.category', () => {
+    assert.match(SCHEDULER_SRC, /getKeywordWindowOverride\(task\.title, contextKeywords, activeWindowNames, task\.category\)/);
+    assert.match(SCHEDULER_SRC, /matchKeywordRule\(title, contextKeywords, \{ category, activeWindowNames \}\)/);
+  });
+  it('W-2 the daily QC check passes task.category and the shared open-window rule', () => {
+    assert.match(QC_SRC, /matchKeywordRule\(task\.title, keywords, \{\s*category: task\.category,/);
+    assert.match(QC_SRC, /return activeWindowNamesForDay\(timeWindows, day\);/);
+  });
+});
