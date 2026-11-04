@@ -67,3 +67,45 @@ Mutation M-7 re-run (`scripts/mutate.sh`, anchor/replacement from files, test cm
 again. Loop 2: INERT.
 Limit (inference, not a defect): W-2 is a source-text assertion, so a reformat of that line (line break inside
 the call) would also fail it -- a false red, never a false green.
+
+### L2-2 -- activeWindowNamesForDay requires numeric start and end; builder windows unchanged -- **CONFIRMED**
+
+Observation (code, keyword-rules.ts:83): `if (typeof win.start !== 'number' || typeof win.end !== 'number' || win.end - win.start <= 0) continue;`
+Q-5 test asserts `{evening:{end:22,days:[2]}}` on day 2 -> `[]`.
+
+Live configs (read-only SELECT `config->'timeWindows'` from `public.user_scheduling_prefs`): 4 rows -- template
+`0000..01` and owner `a3378f93` carry saved windows (all start/end numeric); `4132de9e` and `cce61d43` are null
+and resolve to `DEFAULT_TIME_WINDOWS`. Probe: the pre-change `getActiveWindows` body copied verbatim from
+3995235 vs the 446aa32 body over the real `activeWindowNamesForDay`, 3 configs x days 0-6:
+**`LIVE: 21 SAME, 0 DIFF`**. Owner Tue = evening/morning/after_work/business_hours; Sat = weekends (600 min).
+
+Edge shapes, day 2, old vs new: no `start` `{}`/`{}` (L2-2 drift closed); no `end` `{}`/`{}`; `start==end`
+`{}`/`{}`; `start:0` both keep (360 min).
+**One residual divergence (L3-2, low, not reachable with live data):** string bounds `{start:'19', end:'22'}`
+were KEPT by the old builder (`'22'-'19'` coerces to 3, so 180 min) and are now DROPPED. No live row has string
+bounds. Whether the settings UI can ever save strings was NOT REACHED.
+
+## Stopped at the budget
+
+The wall clock read 16:37 UTC at the L2-2 probe, against a 03:50 UTC start. That is far over the 20-minute budget.
+It most likely reflects a session pause rather than working time (inference), but the budget rule is followed.
+
+| claim | verdict this loop |
+|---|---|
+| L2-3 rollout steps 1-2 gated on pre-rollout values (read-only SELECTs) | **NOT REACHED**. Diff read only: step 1 adds `AND category IN ('VENTURES','CAREER')`, step 2 adds `AND (company IS NULL OR btrim(company) = '')`. The predicates were not evaluated on live rows. |
+| C2 Saturday "Family dinner" through the bundled QC step | **QC-side probe NOT REACHED**. Builder side covered by the 21/21 above; QC wiring covered by M-7 FIRED. |
+| C1, C3-C9, D-1, D-2, D-6, D-7, N-1, Q-4 (light re-check) | **CONFIRMED at suite depth**: 502/0 and symbols exit 0. The `cf9f680..446aa32` diff touches none of their code except the files listed above; D-6's steps 3-4 are unchanged in the diff. No per-claim probe re-run. |
+| golden-path UI regression | **NOT REACHED** (out of scope, not deployed) |
+
+## Findings this loop
+
+| id | severity | finding |
+|---|---|---|
+| L3-1 | low (guard gap) | The D-4 guard message has no test. M-8 (always the generic message) is INERT. |
+| L3-2 | low, unreachable today | String window bounds were kept by the old builder and are dropped now. |
+
+## Verdict
+
+CONFIRMED: D-4/L2-1, G-1, L2-2, plus suite-depth re-checks of C1-C9, D-1, D-2, D-6, D-7, N-1, Q-4
+REFUTED: none
+NOT REACHED: L2-3 live-predicate check, C2 QC-side Saturday probe, golden path
