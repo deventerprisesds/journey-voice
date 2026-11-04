@@ -347,8 +347,12 @@ async function executeToolCall(
           auto_schedule: true
         }, context?.timezone);
       
+      // Every single-task mutation below is scoped to the CALLER (`.eq('user_id', userId)`), the same
+      // way delete_task / batch_update_tasks already were: an id alone must never reach another
+      // user's row. A non-matching id returns "Task not found". Pinned by
+      // execute-tool/task-scope.test.ts.
       case 'update_task':
-        return await updateTask(supabase, args);
+        return await updateTask(supabase, userId, args);
 
       // Internal: the owner deleting one of their OWN tasks from Huddle's board (a card's "Delete"
       // action, behind a confirm). Same effect as journey's own TaskDetailModal delete; the
@@ -361,13 +365,13 @@ async function executeToolCall(
         return await batchUpdateTasks(supabase, userId, args);
 
       case 'reschedule_task':
-        return await rescheduleTask(supabase, args);
-      
+        return await rescheduleTask(supabase, userId, args);
+
       case 'schedule_task':
-        return await scheduleTask(supabase, args);
-      
+        return await scheduleTask(supabase, userId, args);
+
       case 'unschedule_task':
-        return await unscheduleTask(supabase, args);
+        return await unscheduleTask(supabase, userId, args);
 
       case 'set_scheduling_caveat':
         return await setSchedulingCaveat(supabase, userId, args);
@@ -472,10 +476,10 @@ async function executeToolCall(
         return await moveTaskToDay(supabase, userId, args, context.timezone);
 
       case 'swap_task_order':
-        return await swapTaskOrder(supabase, args);
+        return await swapTaskOrder(supabase, userId, args);
 
       case 'set_priority_rank':
-        return await setPriorityRank(supabase, args);
+        return await setPriorityRank(supabase, userId, args);
 
       case 'quick_create_task':
         return await quickCreateTask(supabase, userId, args, context.timezone);
@@ -986,7 +990,7 @@ async function deleteTask(supabase: any, userId: string, args: any): Promise<Exe
   }
 }
 
-async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse> {
+async function updateTask(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   if (!args.task_id) return { success: false, error: "Task ID is required" };
 
   try {
@@ -1022,17 +1026,17 @@ async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse
       .from('tasks')
       .update(updateData)
       .eq('id', args.task_id)
+      .eq('user_id', userId)
       .select()
       .maybeSingle();
 
     if (error) throw error;
     if (!data) {
-      // No row matched this id. Surface WHICH id failed instead of PostgREST's opaque "Cannot coerce
-      // the result to a single JSON object" that .single() raises on 0 rows — that message hid a
-      // stale/incorrect task_id (e.g. a caller passing an id that isn't in public.tasks) and made the
-      // failure look like an unrelated parsing bug. Service-role client, so this is a true not-found,
-      // not an RLS filter.
-      return { success: false, error: `No task matched id ${args.task_id} (0 rows updated)` };
+      // No row matched this id FOR THIS CALLER (unknown id, or another user's task -- the two are
+      // deliberately indistinguishable). Surface WHICH id failed instead of PostgREST's opaque
+      // "Cannot coerce the result to a single JSON object" that .single() raises on 0 rows -- that
+      // message hid a stale/incorrect task_id and made the failure look like a parsing bug.
+      return { success: false, error: `Task not found: no task matched id ${args.task_id} (0 rows updated)` };
     }
 
     return {
@@ -1083,7 +1087,7 @@ async function batchUpdateTasks(supabase: any, userId: string, args: any): Promi
   };
 }
 
-async function rescheduleTask(supabase: any, args: any, timezone?: string): Promise<ExecuteToolResponse> {
+async function rescheduleTask(supabase: any, userId: string, args: any, timezone?: string): Promise<ExecuteToolResponse> {
   if (!args.task_id) return { success: false, error: "Task ID is required" };
   if (!args.new_date) return { success: false, error: "New date is required" };
 
@@ -1113,6 +1117,7 @@ async function rescheduleTask(supabase: any, args: any, timezone?: string): Prom
           .from('tasks')
           .select('category')
           .eq('id', args.task_id)
+          .eq('user_id', userId)
           .single();
         const taskCategory = taskData?.category || 'LIFE';
 
@@ -1155,13 +1160,15 @@ async function rescheduleTask(supabase: any, args: any, timezone?: string): Prom
       .from('tasks')
       .update(updateData)
       .eq('id', args.task_id)
+      .eq('user_id', userId)
       .select()
-      .single();
+      .maybeSingle();
 
     if (error) throw error;
+    if (!data) return { success: false, error: "Task not found" };
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       result: { task: data },
       message: `Rescheduled "${data.title}" to ${normalizedStartTime}`
     };
@@ -1170,7 +1177,7 @@ async function rescheduleTask(supabase: any, args: any, timezone?: string): Prom
   }
 }
 
-async function scheduleTask(supabase: any, args: any, timezone?: string): Promise<ExecuteToolResponse> {
+async function scheduleTask(supabase: any, userId: string, args: any, timezone?: string): Promise<ExecuteToolResponse> {
   if (!args.task_id) return { success: false, error: "Task ID is required" };
 
   const tz = timezone || 'America/New_York';
@@ -1184,11 +1191,13 @@ async function scheduleTask(supabase: any, args: any, timezone?: string): Promis
       .from('tasks')
       .select('id, title, start_time, end_time, is_scheduled')
       .eq('id', args.task_id)
-      .single();
-    
+      .eq('user_id', userId)
+      .maybeSingle();
+
     if (fetchError) {
       return { success: false, error: `Task not found: ${fetchError.message}` };
     }
+    if (!existingTask) return { success: false, error: "Task not found" };
     
     if (existingTask?.is_scheduled && existingTask?.start_time) {
       console.warn(`[SCHEDULE_TASK] ⚠️ SKIPPED: Task "${existingTask.title}" already scheduled at ${existingTask.start_time}`);
@@ -1273,13 +1282,15 @@ async function scheduleTask(supabase: any, args: any, timezone?: string): Promis
       .from('tasks')
       .update(updateData)
       .eq('id', args.task_id)
+      .eq('user_id', userId)
       .select()
-      .single();
+      .maybeSingle();
 
     if (error) throw error;
+    if (!data) return { success: false, error: "Task not found" };
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       result: { task: data },
       message: `Scheduled "${data.title}" for ${normalizedStartTime}`
     };
@@ -1675,7 +1686,7 @@ async function undoActivityStart(supabase: any, userId: string): Promise<Execute
   }
 }
 
-async function unscheduleTask(supabase: any, args: any): Promise<ExecuteToolResponse> {
+async function unscheduleTask(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   if (!args.task_id) return { success: false, error: "Task ID is required" };
 
   try {
@@ -1688,10 +1699,12 @@ async function unscheduleTask(supabase: any, args: any): Promise<ExecuteToolResp
         status: 'BACKLOG'
       })
       .eq('id', args.task_id)
+      .eq('user_id', userId)
       .select()
-      .single();
+      .maybeSingle();
 
     if (error) throw error;
+    if (!data) return { success: false, error: "Task not found" };
 
     return { 
       success: true, 
@@ -3232,26 +3245,26 @@ async function moveTaskToDay(supabase: any, userId: string, args: any, timezone?
     // Fall back to a default time at the start of the requested window or 9am
     const range = itineraryWindowRange(args.window || 'business_hours');
     const fallback = `${String(range.start).padStart(2, '0')}:00`;
-    return rescheduleTask(supabase, { task_id: args.task_id, new_date: args.date, new_start_time: fallback }, tz);
+    return rescheduleTask(supabase, userId, { task_id: args.task_id, new_date: args.date, new_start_time: fallback }, tz);
   }
   const slot = (slotResp.result as any).slots[0];
   const hh = String(Math.floor(slot.start_hour)).padStart(2, '0');
   const mm = String(Math.round((slot.start_hour - Math.floor(slot.start_hour)) * 60)).padStart(2, '0');
-  return rescheduleTask(supabase, { task_id: args.task_id, new_date: args.date, new_start_time: `${hh}:${mm}` }, tz);
+  return rescheduleTask(supabase, userId, { task_id: args.task_id, new_date: args.date, new_start_time: `${hh}:${mm}` }, tz);
 }
 
-async function swapTaskOrder(supabase: any, args: any): Promise<ExecuteToolResponse> {
+async function swapTaskOrder(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   if (!args.task_id_a || !args.task_id_b) return { success: false, error: 'task_id_a and task_id_b required' };
   try {
-    const { data: tasks, error } = await supabase.from('tasks').select('id, title, start_time, end_time').in('id', [args.task_id_a, args.task_id_b]);
+    const { data: tasks, error } = await supabase.from('tasks').select('id, title, start_time, end_time').in('id', [args.task_id_a, args.task_id_b]).eq('user_id', userId);
     if (error) throw error;
-    if (!tasks || tasks.length !== 2) return { success: false, error: 'Both tasks not found' };
+    if (!tasks || tasks.length !== 2) return { success: false, error: 'Task not found: both tasks must exist and belong to you' };
     const a = tasks.find((t: any) => t.id === args.task_id_a);
     const b = tasks.find((t: any) => t.id === args.task_id_b);
     if (!a?.start_time || !b?.start_time) return { success: false, error: 'Both tasks must be scheduled' };
     const [updA, updB] = await Promise.all([
-      supabase.from('tasks').update({ start_time: b.start_time, end_time: b.end_time }).eq('id', a.id),
-      supabase.from('tasks').update({ start_time: a.start_time, end_time: a.end_time }).eq('id', b.id),
+      supabase.from('tasks').update({ start_time: b.start_time, end_time: b.end_time }).eq('id', a.id).eq('user_id', userId),
+      supabase.from('tasks').update({ start_time: a.start_time, end_time: a.end_time }).eq('id', b.id).eq('user_id', userId),
     ]);
     if (updA.error) throw updA.error;
     if (updB.error) throw updB.error;
@@ -3261,14 +3274,15 @@ async function swapTaskOrder(supabase: any, args: any): Promise<ExecuteToolRespo
   }
 }
 
-async function setPriorityRank(supabase: any, args: any): Promise<ExecuteToolResponse> {
+async function setPriorityRank(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   if (!args.task_id) return { success: false, error: 'task_id required' };
   try {
     const update: any = args.unset
       ? { is_priority: false, priority_rank: null }
       : { is_priority: true, priority_rank: args.rank ?? null };
-    const { data, error } = await supabase.from('tasks').update(update).eq('id', args.task_id).select('id, title, is_priority, priority_rank').single();
+    const { data, error } = await supabase.from('tasks').update(update).eq('id', args.task_id).eq('user_id', userId).select('id, title, is_priority, priority_rank').maybeSingle();
     if (error) throw error;
+    if (!data) return { success: false, error: 'Task not found' };
     return { success: true, result: { task: data }, message: args.unset ? `Removed "${data.title}" from priority lane` : `"${data.title}" set as priority${data.priority_rank ? ` (rank ${data.priority_rank})` : ''}` };
   } catch (error) {
     return { success: false, error: extractErrorMessage(error) };
