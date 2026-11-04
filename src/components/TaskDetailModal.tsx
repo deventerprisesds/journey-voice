@@ -17,6 +17,7 @@ import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
+import WorkSessionFamily from '@/components/WorkSessionFamily';
 import { Task, ChecklistItem } from '@/types/task';
 import { useMemo } from 'react';
 import { toLocalTimeHHMM, fromHHMMToISO } from '@/lib/date';
@@ -442,6 +443,9 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
           </TabsList>
 
           <TabsContent value="details" className="space-y-6">
+          {/* Coursework work sessions: which assignment this block belongs to, and all its blocks */}
+          <WorkSessionFamily task={task} />
+
           {/* Title */}
           <div className="space-y-2">
             <Label htmlFor="title">Title</Label>
