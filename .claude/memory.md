@@ -744,3 +744,8 @@ order is seeder-first, delete-second.
   change that sends new body fields (an old Huddle route ignores `window` and would run an hour-derived
   edition, e.g. 5pm -> the EVENING edition, pre-empting the 8pm brief).
 - The live email relay (Cloudflare worker /notify) is now on main (#55); never deploy it from a side branch.
+
+## Hardening — 2026-11-04
+- **The Supabase CLI is installed at `latest`; a 2026-11 release made `secrets set` and `functions deploy` refuse to run without a TTY unless `--yes`.** Every CLI call in CI must pass `--yes` — including the one inside `scripts/deploy-all-functions.sh`, which mode=all uses instead of the workflow's own lines (missed once: #81 fixed the workflow, #82 the script).
+- **A workflow-only change to `deploy-supabase-functions.yml` does not trigger a deploy** (`paths: supabase/functions/**`); dispatch with `function_name: all` from `main` afterwards.
+- **An open PR can silently go `dirty` and strand approved work for days.** #78 (work sessions) sat conflicted 10-29 → 11-03 while the owner believed it shipped. Read `mergeable_state` of any open PR carrying approved work before reporting status.
