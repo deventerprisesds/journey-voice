@@ -44,7 +44,8 @@ describe('buildCategoryGuide', () => {
   it('G-5 lists every category and the owner rulings', () => {
     const g = buildCategoryGuide({});
     for (const k of CATEGORY_KEYS) assert.match(g, new RegExp(`- ${k}:`));
-    assert.match(g, /SDLC .*JOB, even when one of the owner's own products is named/);
+    assert.match(g, /names one of the owner's own products or clients is VENTURES -- even SDLC work for it/);
+    assert.match(g, /Otherwise, SDLC .*JOB by default/);
     assert.match(g, /ops decks and ops process diagrams are JOB/);
   });
   it('G-6 groups the hints by category', () => {
@@ -54,8 +55,8 @@ describe('buildCategoryGuide', () => {
     assert.match(g, /- JOB: esri/);
     assert.match(g, /- VENTURES: huddle, nexus/);
   });
-  it('G-7 the hint list says the SDLC rule beats a product hint (live scorecard E-21 miss, 2026-11-04)', () => {
+  it('G-7 a named own product beats the SDLC default (owner ruling 2026-11-04, scorecard E-21)', () => {
     const g = buildCategoryGuide({ hints: [{ name: 'sidecar', category: 'VENTURES' }] });
-    assert.match(g, /NAME HINTS .*EXCEPT that rule 1 below always wins: SDLC/);
+    assert.match(g, /NAME HINTS .*this beats the SDLC default/);
   });
 });

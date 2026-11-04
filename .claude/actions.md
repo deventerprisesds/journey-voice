@@ -674,3 +674,4 @@ client work + own apps = VENTURES; Esri / Power BI / SDLC / ops decks = JOB; no 
 | 9 | Scorecard on the live parser | 26/27 both runs; E-21 "Write the SDLC doc for Sidecar" 0/3 → 2/3 after #86 | eval runs 41871280229, 41876505166 |
 | 10 | Owner sees Job tab / Settings rows / dropdowns in TaskOS; Job row in Huddle | **NOT confirmed** (Lovable deploy, owner hard-refresh needed) | — |
 | 11 | Phone widget JOB | reaches phone on next Android build | f5f17f9 |
+| 12 | Owner re-ruling 2026-11-04: SDLC work naming an own product ("SDLC doc for Sidecar") = VENTURES; unnamed SDLC = JOB | rules + tests + scorecard updated | branch `claude_job-sdlc-product-ventures` |
