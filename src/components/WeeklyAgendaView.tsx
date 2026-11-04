@@ -26,7 +26,7 @@ import {
 import { activityBusySlots } from '../../supabase/functions/_shared/activities.ts';
 import { cn } from '@/lib/utils';
 import { humanizeCalendarId } from '@/lib/calendarUtils';
-import { Task, ExternalCalendarEvent } from '@/types/task';
+import { Task, ExternalCalendarEvent, TaskCategory } from '@/types/task';
 import { DEFAULT_SCHEDULING_CONFIG } from '@/config/schedulingRules';
 import { loadUserSchedulingConfig, type SchedulingConfig } from '@/services/schedulingService';
 import { getTimePartsInTimezone, getDateInTimezone, getDefaultTimezone, formatTimeInTimezone, dateToKeyInTimezone, getTodayInTimezone } from '@/lib/date';
@@ -91,8 +91,11 @@ const priorityBadgeColors: Record<string, string> = {
   URGENT: 'bg-priority-urgent/10 text-priority-urgent border-priority-urgent/20',
 };
 
-const categoryColors: Record<string, string> = {
+// Typed by the shared category list so a category missing here is a type error.
+// PERSONAL is excluded on purpose: it never had an entry here, so its lookup stays undefined (unchanged).
+const categoryColors: Record<Exclude<TaskCategory, 'PERSONAL'>, string> = {
   LIFE: 'bg-category-life/10 text-category-life border-category-life/20',
+  JOB: 'bg-category-job/10 text-category-job border-category-job/20',
   CAREER: 'bg-category-career/10 text-category-career border-category-career/20',
   VENTURES: 'bg-category-ventures/10 text-category-ventures border-category-ventures/20',
   EDUCATION: 'bg-category-education/10 text-category-education border-category-education/20',
