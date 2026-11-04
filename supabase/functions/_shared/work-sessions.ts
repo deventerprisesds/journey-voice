@@ -41,6 +41,12 @@ export interface SessionConfig {
   defaultEffortMinutes: number; // total effort when the card has no estimate (owner: 180)
   lateBufferHours: number;      // when finish-by is already past: last session ends ≥ this long before due
   todayLeadMinutes: number;     // never start a session sooner than this from "now"
+  // Owner 2026-11-04: "It's not realistic that i would switch back and forth between papers in the
+  // same night ... more finite assignment types like readings or powerpoint maybe". So a day holds
+  // sessions of at most ONE paper-type assignment; a title matching one of these words is a finite
+  // type (no such limit). Anything that matches none is treated as a paper.
+  onePaperPerDay: boolean;
+  finiteTypeKeywords: string[];
 }
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = {
@@ -50,6 +56,8 @@ export const DEFAULT_SESSION_CONFIG: SessionConfig = {
   defaultEffortMinutes: 180,
   lateBufferHours: 1,
   todayLeadMinutes: 15,
+  onePaperPerDay: true,
+  finiteTypeKeywords: ['reading', 'readings', 'read', 'chapter', 'chapters', 'powerpoint', 'slides', 'slide deck', 'presentation', 'ppt'],
 };
 
 /** `config.assignmentSessions` from user_scheduling_prefs, over the seeded defaults (all editable). */
@@ -65,6 +73,10 @@ export function resolveSessionConfig(userConfig: any): SessionConfig {
     defaultEffortMinutes: num(raw.defaultEffortMinutes, 15, DEFAULT_SESSION_CONFIG.defaultEffortMinutes),
     lateBufferHours: num(raw.lateBufferHours, 0, DEFAULT_SESSION_CONFIG.lateBufferHours),
     todayLeadMinutes: num(raw.todayLeadMinutes, 0, DEFAULT_SESSION_CONFIG.todayLeadMinutes),
+    onePaperPerDay: raw.onePaperPerDay === false ? false : true,
+    finiteTypeKeywords: Array.isArray(raw.finiteTypeKeywords)
+      ? raw.finiteTypeKeywords.filter((k: unknown) => typeof k === 'string' && k.trim()).map((k: string) => k.trim().toLowerCase())
+      : [...DEFAULT_SESSION_CONFIG.finiteTypeKeywords],
   };
 }
 
@@ -193,6 +205,15 @@ export const courseOf = (parent: { scheduling_context?: Record<string, any> | nu
   return typeof src === 'string' && /^[A-Z]{2,5}-?\d{3}/i.test(src.trim()) ? src.trim() : null;
 };
 
+/** True when the assignment's title names a finite type (a reading, a PowerPoint...): whole-word match. */
+export function isFiniteAssignment(title: string, keywords: string[]): boolean {
+  const t = ` ${stripEmoji(title).toLowerCase().replace(/[^a-z0-9]+/g, ' ')} `;
+  return keywords.some((k) => {
+    const w = k.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    return w.length > 0 && t.includes(` ${w} `);
+  });
+}
+
 /** Subtract busy intervals from a window list; returns sorted free intervals. */
 export function freeIntervals(windows: Interval[], busy: Interval[]): Interval[] {
   let free = windows.map((w) => ({ ...w })).sort((a, b) => a.start - b.start);
@@ -265,12 +286,15 @@ export function planWorkSessions(input: SessionPlanInput): SessionPlan {
   };
 
   // Mutable per-day state shared across assignments (earliest due picks first).
-  const state = new Map<string, { free: Interval[]; cap: number }>();
-  for (const d of days) state.set(d.date, { free: freeIntervals(d.windows, d.busy), cap: d.capRemaining });
+  // `paper`: the one paper-type assignment that already has a session that day (onePaperPerDay).
+  const state = new Map<string, { free: Interval[]; cap: number; paper: string | null }>();
+  for (const d of days) state.set(d.date, { free: freeIntervals(d.windows, d.busy), cap: d.capRemaining, paper: null });
+  let currentPaper: string | null = null; // set per parent below: its id when it is a paper type
   const take = (date: string, iv: Interval) => {
     const s = state.get(date)!;
     s.free = freeIntervals(s.free, [iv]);
     s.cap -= 1;
+    if (currentPaper && !s.paper) s.paper = currentPaper;
   };
 
   const sessionsByAssignment = new Map<string, SessionTask[]>();
@@ -287,15 +311,28 @@ export function planWorkSessions(input: SessionPlanInput): SessionPlan {
     .filter((p) => p.assignment_id && !isSessionTask(p))
     .sort((a, b) => Date.parse(a.due_date ?? '9999-12-31') - Date.parse(b.due_date ?? '9999-12-31'));
 
+  const pinnedOf = (s: SessionTask) => {
+    // Hand-edited = it has a time, the time is not where this planner last put it, and it is not past.
+    const placed = s.scheduling_context?.session?.placed_start ?? null;
+    return !!(s.start_time && !isDone(s) && Date.parse(s.start_time) >= nowMs &&
+      (placed === null || Date.parse(placed) !== Date.parse(s.start_time)));
+  };
+  const isPaperParent = (p: ParentTask) => config.onePaperPerDay && !isFiniteAssignment(p.title, config.finiteTypeKeywords);
+  // A paper session the owner moved by hand claims its night BEFORE any planning, whatever the due-date
+  // order, so no other paper is added next to it.
+  for (const p of parentList) {
+    if (!isPaperParent(p)) continue;
+    for (const s of sessionsByAssignment.get(p.assignment_id!) ?? []) {
+      if (!pinnedOf(s)) continue;
+      const st = state.get(localDateOf(s.start_time!, tz)!);
+      if (st && !st.paper) st.paper = p.assignment_id!;
+    }
+  }
+
   for (const parent of parentList) {
     const aId = parent.assignment_id!;
+    currentPaper = isPaperParent(parent) ? aId : null;
     const own = sessionsByAssignment.get(aId) ?? [];
-    const pinnedOf = (s: SessionTask) => {
-      // Hand-edited = it has a time, the time is not where this planner last put it, and it is not past.
-      const placed = s.scheduling_context?.session?.placed_start ?? null;
-      return !!(s.start_time && !isDone(s) && Date.parse(s.start_time) >= nowMs &&
-        (placed === null || Date.parse(placed) !== Date.parse(s.start_time)));
-    };
 
     const tags = parent.tags ?? [];
     const parentClosed = isDone(parent);
@@ -374,6 +411,7 @@ export function planWorkSessions(input: SessionPlanInput): SessionPlan {
     const fitsOn = (date: string) => {
       const st = state.get(date);
       if (!st || st.cap <= 0) return null;
+      if (currentPaper && st.paper && st.paper !== currentPaper) return null;
       return earliestFit(st.free, config.sessionMinutes, notBefore(date), endLimit);
     };
 
