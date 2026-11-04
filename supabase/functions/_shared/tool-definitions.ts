@@ -514,6 +514,40 @@ export function getToolDefinitions(): ToolDefinition[] {
     },
     {
       type: "function",
+      name: "update_calendar_event",
+      description: "Move, retime or rename one of the user's existing Outlook or Google calendar events. Identify the event by event_id (from a calendar read or an earlier candidates list), or by match_title and/or match_start_time. If several events match, the tool returns candidates and changes nothing: ask the user which one, then call again with its event_id. If only new_start_time is given, the original duration is kept.",
+      parameters: {
+        type: "object",
+        properties: {
+          event_id: { type: "string", description: "Provider event id of the event to change" },
+          provider: { type: "string", enum: ["outlook", "google"], description: "Which calendar the event is on (needed only for an event_id not yet synced)" },
+          match_title: { type: "string", description: "Title (or part of it) of the event to change, when no event_id" },
+          match_start_time: { type: "string", description: "Current start time of the event to change, ISO 8601, when no event_id" },
+          new_start_time: { type: "string", description: "New start time, ISO 8601" },
+          new_end_time: { type: "string", description: "New end time, ISO 8601" },
+          new_title: { type: "string", description: "New title" },
+          new_location: { type: "string", description: "New location" }
+        }
+      }
+    },
+    {
+      type: "function",
+      name: "delete_calendar_event",
+      description: "Delete one of the user's Outlook or Google calendar events. ONLY call this when the user has explicitly asked, in this conversation, to delete or cancel that specific event; never on your own initiative, and never to tidy up or resolve a conflict. Set user_explicitly_requested to true only in that case; otherwise the tool refuses. If several events match, it returns candidates and deletes nothing: ask the user which one.",
+      parameters: {
+        type: "object",
+        properties: {
+          event_id: { type: "string", description: "Provider event id of the event to delete" },
+          provider: { type: "string", enum: ["outlook", "google"], description: "Which calendar the event is on (needed only for an event_id not yet synced)" },
+          match_title: { type: "string", description: "Title (or part of it) of the event to delete, when no event_id" },
+          match_start_time: { type: "string", description: "Start time of the event to delete, ISO 8601, when no event_id" },
+          user_explicitly_requested: { type: "boolean", description: "true ONLY if the user explicitly asked to delete this event in this conversation" }
+        },
+        required: ["user_explicitly_requested"]
+      }
+    },
+    {
+      type: "function",
       name: "initiate_phone_call",
       description: "Schedule a callback - useful for 'call me back in X minutes' requests.",
       parameters: {
