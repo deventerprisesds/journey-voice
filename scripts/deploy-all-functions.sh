@@ -75,7 +75,7 @@ for slug in "${slugs[@]}"; do
     continue
   fi
   echo "::group::deploy $slug"
-  supabase functions deploy "$slug" --project-ref "$PROJECT_REF" 2>&1 | tee "$log"
+  supabase functions deploy "$slug" --project-ref "$PROJECT_REF" --yes 2>&1 | tee "$log"
   rc=${PIPESTATUS[0]}
   echo "::endgroup::"
   if [ "$rc" -eq 0 ]; then
