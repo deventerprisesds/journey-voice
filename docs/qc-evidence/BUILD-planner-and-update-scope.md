@@ -37,3 +37,34 @@ Separate finding, outside A's scope and NOT changed: the stale-archive passes (L
 L600-625) select `.not('status','eq','DONE')` and write `status: 'DONE'`, so an IN_REVIEW or
 DOING task with pushed_count >= 5 and a due date more than 30 days ago (or a stale education task)
 gets auto-archived to DONE. See NEEDS OWNER below.
+
+## Step 2: B, gap survey + caller audit (on 8b7bd07, before any edit)
+
+`supabase/functions/execute-tool/index.ts`, which tool functions filter on the caller:
+
+| tool | fn (line) | receives userId? | task query filtered on user_id? |
+|---|---|---|---|
+| update_task | `updateTask` L980 | no | **no**, `.eq('id', task_id)` only |
+| delete_task | `deleteTask` L963 | yes | yes (the pattern to copy) |
+| batch_update_tasks | `batchUpdateTasks` L1041 | yes | yes, L1062 |
+| reschedule_task | `rescheduleTask` L1077 | no | **no** (category read + update) |
+| schedule_task | `scheduleTask` L1164 | no | **no** (existing-task read + update) |
+| unschedule_task | `unscheduleTask` L1669 | no | **no** |
+| move_task_to_day | `moveTaskToDay` L3207 | yes | delegates to `rescheduleTask`, **so no** |
+| swap_task_order | `swapTaskOrder` L3224 | no | **no** (read of both + 2 updates) |
+| set_priority_rank | `setPriorityRank` L3245 | no | **no** |
+
+Callers of execute-tool, and where their `userId` comes from:
+
+| caller | userId source | is it the task owner? |
+|---|---|---|
+| `huddle-proxy` L198-208 | `resolveUserId(caller.entra_email)`: alias table first, then `profiles.email` | yes, the canonical owner (the same mapping the task-sync uses) |
+| journey chat `hybrid-assistant-api` L277-303 | request user, the same id its `get_tasks` lists under | yes |
+| journey voice `UnifiedVoiceToolHandler`, `RealtimeVoiceAssistant` L505-507, `useChatAssistant` L477/546 | `supabase.auth.getUser()` | yes |
+| phone `twilio-realtime-bridge` via `_shared/tool-executor.ts`, `conversation-relay-handler` | phone/session-resolved user | yes. A null userId is already rejected with 400 by execute-tool's `serve` |
+| `twilio-voice-handler` | has its own `executeTool`, does not call execute-tool | n/a |
+| nightly / cron | no caller of these tools found (`grep` for the tool names outside execute-tool, tool-definitions and tests) | n/a |
+
+Task ids reach every caller through `get_tasks`, which is `.eq('user_id', userId)` (L626), so an
+honest caller only ever holds ids it owns. Conclusion: scoping cannot break any legitimate caller
+found, so all seven are scoped.
