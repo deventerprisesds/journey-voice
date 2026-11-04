@@ -122,3 +122,43 @@ Labels as above: **O** = observed in this pass, **I** = inferred.
 ### R2. Tests on the merged tree (O)
 - `npm test`: **601 tests, 601 pass, 0 fail** (`scripts/run-tests.mjs`; roots are src, supabase/functions, cloudflare/src, scripts).
 - The probes in `docs/qc-evidence/probes/` are NOT in those roots. Run on their own: 18/18 pass.
+
+### R3. The "Not proven" gaps, closed with tests in the collected suite (O)
+
+State found on the merged tree:
+- **Device dedupe:** already tested in `manage-push-subscription/index.auth.test.ts`, which `npm test` runs ("J14 dedupe scope", "J14 dedupe: an empty-string token is refused", and others). Loop 2 mutation-proved it. Re-proved below on the merged tree.
+- **alarm-action scoping + allow-list:** tested only by the verifier probes in `docs/qc-evidence/probes/alarm-action.probe.test.ts`, which `npm test` does NOT collect. Nothing re-ran them.
+- **UNREGISTERED prune:** no test anywhere.
+
+New files, both inside the `supabase/functions` root that `npm test` collects, both using the same probe harness (the real handler source, with remote imports stubbed):
+- `supabase/functions/alarm-action/index.test.ts`, 6 tests:
+  - AA-scope-own: token (X,A) DONE changes A only;
+  - AA-scope-cross: a valid token (X,B), where B is Y's task, changes nothing for any of the four statuses. That includes B's queued alarms;
+  - AA-scope-write-filter: the UPDATE carries both `id` and `user_id`;
+  - AA-scope-body: `userId`/`taskId` in the body cannot override the token;
+  - AA-allow-reject: 12 bad statuses → 400 `bad_status` with zero DB calls;
+  - AA-allow-accept: done/Doing/BACKLOG/park → DONE/DOING/BACKLOG/BACKLOG.
+- `supabase/functions/send-push-notification/index.prune.test.ts`, 5 tests. Each faked FCM response is keyed by device token, and the UNREGISTERED body uses FCM v1's documented `FcmError` shape:
+  - PR-unregistered: 404 + UNREGISTERED → row deleted, one `fcm_token_pruned` row;
+  - PR-only-that-row: the user's other FCM row, their web row and another user's row all survive;
+  - PR-404-not-unregistered: a 404 `NOT_FOUND` without UNREGISTERED keeps the row;
+  - PR-transient: a 503 whose body mentions UNREGISTERED keeps the row;
+  - PR-success: a delivered push deletes nothing.
+
+`npm test` after: **612 tests, 612 pass, 0 fail** (601 + 11).
+
+### R4. Mutations (O, `mutate.sh`; anchors and replacements are files in the session scratchpad, taken from the file's own bytes; test cmd = `node --experimental-strip-types --test <that test file>`; every run reported "restored … matches HEAD" and "tree clean")
+
+| id | mutation | must-fail test | outcome |
+|---|---|---|---|
+| AM1 | alarm-action read drops `.eq("user_id", claims.userId)` | AA-scope-cross | **FIRED** |
+| AM2 | alarm-action UPDATE drops `.eq("user_id", claims.userId)` | AA-scope-write-filter | **FIRED**. Note: with the read still scoped, this mutation changes no outcome. The test pins the filter's shape (defence in depth); it does not prove a behaviour on its own |
+| AM3 | allow-list check → `if (false)` | AA-allow-reject | **FIRED** |
+| AM4 | `STATUSES` widened with TODO/IN_PROGRESS/CANCELLED | AA-allow-reject | **FIRED** |
+| AM5 | `STATUSES` narrowed to DONE only (over-blocking) | AA-allow-accept | **FIRED** |
+| PM1 | prune drops the `(404)` condition | PR-transient | **FIRED** |
+| PM2 | prune drops the `UNREGISTERED\|NotRegistered` condition | PR-404-not-unregistered | **FIRED** |
+| PM3 | prune delete loses `.eq('id', sub.id)` | PR-only-that-row | **FIRED**. The first two runs were NOT-APPLIED: the delete line also appears in the web-push 410 cleanup, so it matched twice, and then my hand-escaped wider anchor did not match. I rebuilt the anchor from the file's own bytes (three lines, starting at the unique comment) |
+| PM4 | prune logs `fcm_send_failed` instead of `fcm_token_pruned` | PR-unregistered | **FIRED** |
+| DM1 | dedupe drops `.eq('fcm_token', fcmToken)` (re-prove on merged tree) | J14 dedupe scope | **FIRED** |
+| DM2 | dedupe `.neq('user_id', userId)` → `'__nobody__'` (re-prove) | J14 dedupe scope | **FIRED** |
