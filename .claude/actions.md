@@ -671,7 +671,7 @@ client work + own apps = VENTURES; Esri / Power BI / SDLC / ops decks = JOB; no 
 | 6 | Data: 5 tasks → JOB, Company = Trinnex, JOB row, CAREER → after_work+weekends, 13 keywords → JOB, 13 name hints | **live** (read back: 5 / Trinnex / 13 / 59 keywords) | `docs/qc-evidence/ROLLOUT-job-category.sql` |
 | 7 | Huddle: Job before Career, hue 200, Cole owns JOB | **merged + SWA deploy success** | deventerpriseds-org/huddle-extension-app#130 (18778f6) |
 | 8 | journey→Huddle sync carries JOB | **verified live** (Test- task synced as JOB, deleted, 0 left; 5 owner tasks JOB in mirror) | — |
-| 9 | Scorecard on the live parser | 26/27 both runs; E-21 "Write the SDLC doc for Sidecar" 0/3 → 2/3 after #86 | eval runs 41871280229, 41876505166 |
+| 9 | Scorecard on the live parser | **27/27** after the owner re-ruled E-21 (runs 1-2 were 26/27) | `docs/qc-evidence/EVAL-job-category-live-2026-11-04.md`; eval runs 41871280229, 41876505166, 41889221051 |
 | 10 | Owner sees Job tab / Settings rows / dropdowns in TaskOS; Job row in Huddle | **NOT confirmed** (Lovable deploy, owner hard-refresh needed) | — |
 | 11 | Phone widget JOB | reaches phone on next Android build | f5f17f9 |
-| 12 | Owner re-ruling 2026-11-04: SDLC work naming an own product ("SDLC doc for Sidecar") = VENTURES; unnamed SDLC = JOB | rules + tests + scorecard updated | branch `claude_job-sdlc-product-ventures` |
+| 12 | Owner re-ruling 2026-11-04: SDLC work naming an own product ("SDLC doc for Sidecar") = VENTURES; unnamed SDLC = JOB | **merged + deployed**, scorecard 27/27 | deventerprisesds/journey-voice#89 (d25124e) |
