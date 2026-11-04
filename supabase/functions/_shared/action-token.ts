@@ -96,7 +96,7 @@ export async function verifyActionToken(
     return null;
   }
   const key = await signingKey(opts.secret);
-  const ok = await crypto.subtle.verify("HMAC", key, sig, enc.encode(`${PREFIX}.${parts[1]}`));
+  const ok = await crypto.subtle.verify("HMAC", key, sig as BufferSource, enc.encode(`${PREFIX}.${parts[1]}`));
   if (!ok) return null;
   let claims: { u?: unknown; t?: unknown; exp?: unknown };
   try {

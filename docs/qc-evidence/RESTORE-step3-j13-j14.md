@@ -162,3 +162,19 @@ New files, both inside the `supabase/functions` root that `npm test` collects, b
 | PM4 | prune logs `fcm_send_failed` instead of `fcm_token_pruned` | PR-unregistered | **FIRED** |
 | DM1 | dedupe drops `.eq('fcm_token', fcmToken)` (re-prove on merged tree) | J14 dedupe scope | **FIRED** |
 | DM2 | dedupe `.neq('user_id', userId)` → `'__nobody__'` (re-prove) | J14 dedupe scope | **FIRED** |
+
+### R5. `deno check` on the merged tree vs `origin/main` 3bb80f0 (O)
+Same setup as section 2 (import map: `deno.land/std` → typed `serve` stub, `esm.sh` supabase-js → `npm:@supabase/supabase-js@2.39.3`), run with `--no-lock`, two deno versions. A canary file with a deliberate type error does report it, so the check is live.
+
+**A false clean, caught and discarded.** The first 2.1.4 run printed zero codes for every file, main included. The cause: the lockfile had been rewritten to v5 by a newer deno, and 2.1.4 refuses v5, so it checked nothing. A second miscount came from my counter dropping the first error, which is prefixed `error:`. The table below is the corrected count.
+
+| file | branch, 2.1.4 | main, 2.1.4 | branch, 2.9.6 | main, 2.9.6 |
+|---|---|---|---|---|
+| `_shared/action-token.ts` | 0 | n/a | **1 → 0** (see below) | n/a |
+| `_shared/push-auth.ts` | 0 | n/a | 0 | n/a |
+| `alarm-action/index.ts` | 0 | n/a | 1 → 0 (it imports action-token) | n/a |
+| `send-push-notification/index.ts` | 6 | 7 | 6 (was 7 before the cast) | 7 |
+| `manage-push-subscription/index.ts` | 4 | 4 | 4 | 4 |
+| `execute-tool/index.ts` | 20 | 20 | 20 | 20 |
+
+Fix on this branch: deno 2.9.6's stricter typed-array generics flagged `crypto.subtle.verify("HMAC", key, sig, …)` (TS2345: `Uint8Array<ArrayBufferLike>` is not a `BufferSource`). It is type-only, because `b64urlDecode` builds a plain `Uint8Array`. I changed it to `sig as BufferSource`, which both versions accept. `npm test` is still 612/612. The remaining send-push / manage-push / execute-tool errors are the pre-existing `.catch`-on-`PromiseLike` / implicit-any patterns, the same on both sides.
