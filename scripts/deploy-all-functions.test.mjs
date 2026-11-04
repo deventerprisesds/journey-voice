@@ -97,7 +97,7 @@ console.log('deploy-all-functions (mode=all):');
 // The scenario from the brief: no exclusion, and the stub rejects mcp exactly as Supabase does.
 const f = run({ functionsDir: fx, fail: 'mcp', exclude: '' });
 check('A1 each function is deployed by its OWN call (one slug per `functions deploy`)',
-  f.calls.length === FNS.length && f.calls.every((c, i) => c === `functions deploy ${FNS[i]} --project-ref wwxgajrtmslzklnyplah`),
+  f.calls.length === FNS.length && f.calls.every((c, i) => c === `functions deploy ${FNS[i]} --project-ref wwxgajrtmslzklnyplah --yes`),
   JSON.stringify(f.calls));
 check('A2 a failure does not stop the functions after it (nightly, zeta still deployed after mcp failed)',
   f.deployedSlugs.includes('nightly') && f.deployedSlugs.includes('zeta')

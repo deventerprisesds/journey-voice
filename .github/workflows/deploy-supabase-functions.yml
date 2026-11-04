@@ -71,7 +71,9 @@ jobs:
             echo "JOURNEY_PROXY_TOKEN not set as a GitHub secret — skipping sync."
             exit 0
           fi
-          supabase secrets set JOURNEY_PROXY_TOKEN="$JOURNEY_PROXY_TOKEN" --project-ref wwxgajrtmslzklnyplah
+          # --yes: the latest CLI refuses to run this without a TTY unless confirmed ("Confirmation required ...
+          # Nothing was changed", run 41687535826). setup-cli installs `latest`, so every CLI call passes --yes.
+          supabase secrets set JOURNEY_PROXY_TOKEN="$JOURNEY_PROXY_TOKEN" --project-ref wwxgajrtmslzklnyplah --yes
           echo "Synced JOURNEY_PROXY_TOKEN to Supabase edge secrets"
 
       - name: Determine functions to deploy
@@ -156,7 +158,7 @@ jobs:
         run: |
           FN="${{ steps.changed.outputs.fn }}"
           echo "Deploying $FN to wwxgajrtmslzklnyplah..."
-          supabase functions deploy "$FN" --project-ref wwxgajrtmslzklnyplah
+          supabase functions deploy "$FN" --project-ref wwxgajrtmslzklnyplah --yes
           echo "✅ $FN deployed"
 
       - name: Deploy changed functions
@@ -164,6 +166,6 @@ jobs:
         run: |
           for fn in ${{ steps.changed.outputs.fns }}; do
             echo "Deploying $fn..."
-            supabase functions deploy "$fn" --project-ref wwxgajrtmslzklnyplah
+            supabase functions deploy "$fn" --project-ref wwxgajrtmslzklnyplah --yes
             echo "✅ $fn deployed"
           done
