@@ -91,6 +91,8 @@ export interface SchedulingConfig {
     sessionMinutes: number;       // length of one work session (owner: 90)
     defaultEffortMinutes: number; // total effort when Nexus gives none (owner: 180)
     lateBufferHours: number;      // already inside the window: last session ends this long before due
+    onePaperPerDay?: boolean;     // at most one paper-type assignment's sessions per night (owner 2026-11-04)
+    finiteTypeKeywords?: string[]; // title words that mark a finite type (reading, PowerPoint) -- not a paper
   };
   /**
    * Recurring / one-off / on-demand ACTIVITIES (lunch, gym, church, haircut, 1:1s) — reserved time
@@ -179,6 +181,8 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
     sessionMinutes: 90,
     defaultEffortMinutes: 180,
     lateBufferHours: 1,
+    onePaperPerDay: true,
+    finiteTypeKeywords: ['reading', 'readings', 'read', 'chapter', 'chapters', 'powerpoint', 'slides', 'slide deck', 'presentation', 'ppt'],
   },
   categoryMappings: {
     // JOB = the employer's work; CAREER = getting the next role (owner 2026-11-03). Seeds only -- both rows
