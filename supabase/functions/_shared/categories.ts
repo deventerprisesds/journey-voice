@@ -31,11 +31,10 @@ export type TaskCategory = typeof CATEGORY_KEYS[number];
 
 /**
  * Default human label per category. A screen that has always shown a different wording keeps its own.
- * LIFE reads "Personal": the owner swapped the words at the LABEL layer (#35, 2026-10-12) and kept the key,
- * because every existing row is LIFE and Postgres cannot drop an enum value. PERSONAL has no rows.
+ * LIFE reads "Life": a 2026-10-12 swap to "Personal" (#35) was reverted by #40, so the screens say Life.
  */
 export const CATEGORY_LABELS: Record<TaskCategory, string> = {
-  LIFE: 'Personal',
+  LIFE: 'Life',
   JOB: 'Job',
   CAREER: 'Career',
   VENTURES: 'Ventures',
