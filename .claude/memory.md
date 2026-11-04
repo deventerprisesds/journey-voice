@@ -12,6 +12,27 @@ Last updated: 2026-10-27
 > distrust, never the sections. `actions.md` has no file-level stamp at all, deliberately, for
 > the same reason: its ACT entries each carry their own date.
 
+## Active work — JOB category, Phase 1 (2026-11-04, branch claude/jolly-archimedes-is9jyz, deventerprisesds/journey-voice#80, NOT merged)
+Owner accepted a role at Trinnex. **JOB** = employer work (business hours by default); **CAREER** = next role
+(after work + weekends); client work and own apps = **VENTURES**; SDLC / ops decks / ops diagrams / Esri / Power BI =
+JOB. No employment start date (owner: "a moot point, stop applying that logic").
+- **One category list**: `supabase/functions/_shared/categories.ts` (JOB directly before CAREER). LIFE's label is
+  **Life** — the #35 swap to "Personal" was reverted by #40 (7401f71); the "LIFE vs PERSONAL" section below
+  describes the pre-revert state.
+- **Keyword lanes gate keyword windows**: `_shared/keyword-rules.ts`, used by the nightly scheduler AND the daily
+  QC. A lane that is not a category (e.g. `flexible`) applies to all. PERSONAL counts as LIFE, EDUCATION as
+  PROF_EDUCATION for this rule only. `schedulingService.extractSchedulingContext` (uncategorised tasks) left as is.
+- **Name hints** = keyword rows with window Flexible + a category lane: the category AI reads them, the scheduler
+  skips them. Employer name comes from `profiles.company`.
+- **resolveConfig now fills missing categories from defaults** (saved rows still win) — without this JOB showed in
+  Settings but the scheduler placed it anywhere.
+- **Scorecard** must run off-box (`eval-job-category.yml`): this session's proxy refuses the project host (CONNECT
+  403), and `npm ci` cannot run here (149 lockfile entries resolve to europe-west1-npm.pkg.dev, refused) — use
+  `npm install --package-lock=false --ignore-scripts` for local typechecks, never commit the lock change.
+- Huddle side: deventerpriseds-org/huddle-extension-app#130 (hue 200, "Job" before Career, cole-blake owns JOB).
+- Phone widget list gains JOB in `public/bridge.config.json` (f5f17f9) — only reaches the phone on the next APK build.
+- Status: implemented + tests green; screens helper and independent verifier still running; nothing live.
+
 ## Activities — reserved time that is NOT a task (2026-10-29, MERGED #76 `ab9834b`, edge fns DEPLOYED; owner not yet confirmed live)
 
 - **undef-check trap:** its import regex `import\s+([^;]*?)\s+from` stops at the FIRST "from", so an
