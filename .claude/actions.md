@@ -649,3 +649,9 @@ Defect: the bulk deploy stopped at mcp's 413 (runs 39159443758, 40575132776). Ti
 | 4 | Mutations | 6 FIRED, 1 behaviourally equivalent | evidence file §4 |
 | 5 | PR opened, not merged | open | (PR link in branch history) |
 | 6 | Seen working in a real all-mode run | **NOT confirmed** | needs the first `_shared` change after merge |
+
+### ACT:assignment-sessions-live — 2026-11-04: #78 merged + deployed, NOT yet confirmed on the owner's board
+- **Ask (owner, 2026-10-29 → 11-03):** assignments must be worked "a little at a time" as `📚 <assignment> — session N of M` cards, not one block then cram.
+- **Why it sat unshipped 5 days:** #78 went `dirty` (merge conflict) against #76/#79 Activities right after it was opened; nobody resolved it. Resolved in `873d3d2` keeping both sides, plus PASS 0 now reserves Activity time as busy (test PASS-3b, mutate.sh FIRED). Merged `0796822`.
+- **Deploy was blocked estate-wide** by the latest Supabase CLI requiring `--yes` without a TTY (run 41687535826 secret sync; run 41692583533 50/50 deploy). Fixed by #81 (workflow) + #82 (`scripts/deploy-all-functions.sh`, test A1, mutate.sh FIRED). Dispatch run 41758220778 on `8bbef70`: **success**. Live `nightly-schedule-builder` v315 contains `runWorkSessionPass` + `activityBusySlots`.
+- **Status:** implemented + deployed, mechanism verified; **NOT confirmed live** — first session cards are created by the 05:00 UTC build. Check: `select title,start_time from tasks where assignment_id like '%::session-%'`.
