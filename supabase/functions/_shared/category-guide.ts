@@ -52,7 +52,7 @@ export function buildCategoryGuide(opts: {
   if (hints.length) {
     const byCat = new Map<TaskCategory, string[]>();
     for (const h of hints) byCat.set(h.category, [...(byCat.get(h.category) ?? []), h.name]);
-    lines.push('THE OWNER\'S NAME HINTS (a task naming one of these usually belongs to that category -- EXCEPT that rule 1 below always wins: SDLC / software-delivery work, ops decks and ops process diagrams are JOB even when they name one of these):');
+    lines.push('THE OWNER\'S NAME HINTS (a task naming one of these belongs to that category -- this beats the SDLC default in rule 2 below):');
     for (const k of CATEGORY_KEYS) {
       const names = byCat.get(k);
       if (names?.length) lines.push(`- ${k}: ${names.join(', ')}`);
@@ -61,8 +61,8 @@ export function buildCategoryGuide(opts: {
 
   lines.push('');
   lines.push('HOW TO DECIDE BETWEEN THE WORK-LIKE CATEGORIES:');
-  lines.push('1. SDLC / software-delivery-process work, ops decks and ops process diagrams are JOB, even when one of the owner\'s own products is named.');
-  lines.push('2. Otherwise, a task that names one of the owner\'s own products or clients is VENTURES.');
+  lines.push('1. A task that names one of the owner\'s own products or clients is VENTURES -- even SDLC work for it (owner ruling 2026-11-04: "Write the SDLC doc for Sidecar" is a side project, VENTURES).');
+  lines.push('2. Otherwise, SDLC / software-delivery-process work, ops decks and ops process diagrams are JOB by default.');
   lines.push('3. Employer signals (my manager, my team, standup, onboarding, timesheet, benefits, compliance training, the employer\'s tools, colleagues or clients) mean JOB.');
   lines.push('4. Getting the next role (applying, interviewing, recruiters, LinkedIn, résumé/CV, career coach) is CAREER -- even if a company or tool is named, e.g. an interview with a recruiter from a tool vendor is CAREER.');
   lines.push('5. Generic work with no owner signal at all ("prepare slides for the client meeting", "finish the quarterly deck") is JOB.');

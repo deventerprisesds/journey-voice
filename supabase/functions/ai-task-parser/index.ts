@@ -223,7 +223,7 @@ VENTURES (Business/entrepreneurial activities):
 JOB (Work for the owner's employer):
 - Work tasks, job responsibilities, meetings with colleagues/boss, standups, 1:1s
 - Onboarding, timesheets, benefits, compliance training, the employer's tools
-- SDLC / software-delivery work, ops decks, ops process diagrams
+- SDLC / software-delivery work, ops decks, ops process diagrams (unless it names one of the owner's own products: then VENTURES)
 - Examples: "Prepare presentation for client", "Team meeting", "Performance review", "Complete benefits enrollment"
 
 CAREER (Getting the NEXT role -- not the current job):
