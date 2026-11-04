@@ -68,3 +68,59 @@ Callers of execute-tool, and where their `userId` comes from:
 Task ids reach every caller through `get_tasks`, which is `.eq('user_id', userId)` (L626), so an
 honest caller only ever holds ids it owns. Conclusion: scoping cannot break any legitimate caller
 found, so all seven are scoped.
+
+## Step 3: B implemented (commit "execute-tool: scope single-task mutations to the caller's user_id")
+
+`supabase/functions/execute-tool/index.ts`, the only source file changed:
+- dispatch passes `userId` to update_task, reschedule_task, schedule_task, unschedule_task,
+  swap_task_order and set_priority_rank (move_task_to_day already received it and now forwards it
+  to `rescheduleTask`).
+- each fn takes `userId` and adds `.eq('user_id', userId)` to every `public.tasks` query (reads
+  included: the reschedule category read, the schedule existing-task read, the swap pair read).
+- `.single()` became `.maybeSingle()` on the mutations, with `if (!data) return {success:false,
+  error:"Task not found"}`, so an unknown or foreign id gets a clean not-found and not PostgREST's
+  coerce error. updateTask's message keeps its old "no task matched id <id> (0 rows updated)" tail.
+  swap returns "Task not found: both tasks must exist and belong to you".
+- Not changed: scheduling logic, window checks, the status values each tool writes, and tool
+  definitions.
+
+## Step 4: Tests + mutation proof
+
+New: `supabase/functions/execute-tool/task-scope.test.ts`. It reads the source, the same approach
+as `send-push-notification/sticky.test.ts`, because execute-tool imports from deno.land and node
+cannot import it. 35 cases: dispatch passes userId (x9), signature takes userId (x9), every
+`.from('tasks')` chain carries `.eq('user_id', userId)` (x8, with a non-vacuity floor), a
+"Task not found" branch exists (x7), moveTaskToDay forwards userId, and updateTask is
+scoped + maybeSingle + not-found.
+
+Local equivalent of `.github/workflows/checks.yml` (node v22.22.0):
+
+| step | result |
+|---|---|
+| `npm test` | `# tests 452  # pass 452  # fail 0` |
+| `npm run check:symbols` | `103 file(s) checked, 0 NEW undefined symbol(s), 1 known` (pre-existing baseline) |
+| `bash scripts/assert-ref-contains-main.test.sh` | `7 passed, 0 failed` |
+
+`mutate.sh` (anchors from files), each restored and checked against HEAD:
+
+| mutation | must-fail test | verdict |
+|---|---|---|
+| drop user_id filter from updateTask's update | updateTask: every public.tasks query is filtered to the caller | FIRED |
+| drop it from setPriorityRank | setPriorityRank: ... | FIRED |
+| drop it from swap's 2nd update only | swapTaskOrder: ... | FIRED |
+| dispatch `unscheduleTask(supabase, args)` | unschedule_task: dispatch passes ... | FIRED |
+| moveTaskToDay fallback without userId | moveTaskToDay reaches rescheduleTask with the caller | FIRED |
+| drop it from scheduleTask's existing-task READ | scheduleTask: ... | FIRED |
+
+No live calls were made. Deploy happens on merge to main (edge fns auto-deploy). Not merged, per
+the brief. Live status: **implemented, mechanism verified locally, NOT deployed, NOT confirmed live.**
+
+## NEEDS OWNER 👍 (found, NOT changed)
+
+| Today | Becomes | Why | Impact | Reversible? |
+|---|---|---|---|---|
+| Planner stale-archive (nightly-schedule-builder L548-625) sets `status:'DONE'` on any non-DONE task with pushed_count>=5 and a due date >30 days ago, or a stale EDUCATION task, **including IN_REVIEW / DOING** | Skip IN_REVIEW/DOING (and BLOCKED) in those two archive selects | DONE is supposed to be set only by the user, by hand; this auto-completes work that is awaiting your review | Old in-review/doing work would stay on the board and not vanish into DONE | yes, one filter |
+| `schedule_task` always writes `status:'UP_NEXT'` and `unschedule_task` always writes `'BACKLOG'` (execute-tool) | Keep IN_REVIEW/DOING/BLOCKED, like the planner's `statusAfterSchedule` | Same demotion problem as A, but on the agent/chat path rather than nightly | An agent scheduling or unscheduling an in-review card would stop knocking it back a lane | yes |
+| execute-tool takes `userId` from the request BODY and accepts the public anon key | Derive the user from the JWT, or require the service role / proxy token | B stops honest callers and stray ids from reaching other users' rows, but a caller that lies about `userId` still can | Client callers would have to send a user JWT; needs a contract change across chat/voice | yes, but multi-file |
+| reschedule/schedule window check reads prefs with `(await supabase.auth.getUser()).data.user?.id \|\| ''` on a service-role client, so it is always `''` and the user's own windows are never used | Use `userId` | The per-user category windows are silently ignored today; only defaults apply | Date-only reschedules may start being blocked or allowed differently | yes |
+| dispatch for `reschedule_task` / `schedule_task` does not pass `context.timezone`, so both default to America/New_York | Pass `context.timezone` | Times land wrong for non-ET users | Changes the times written for non-ET users | yes |
