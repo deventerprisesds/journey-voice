@@ -502,6 +502,36 @@ export function buildSessionWarningLines(plan: SessionPlan, tz: string): string[
     : `• ⚠️ ${w.title}: only ${w.fit} of ${w.needed} work sessions fit before your finish-by date ${fmt(w.finishBy)} (due ${fmt(w.dueLocal)}). Free up some coursework time or tell me to adjust the plan.`);
 }
 
+export const COMPLETE_ASKED_TAG = 'sessions-complete-asked';
+
+export interface CompletionAsk { taskId: string; title: string; total: number; tags: string[]; ask: boolean }
+
+/**
+ * Owner 2026-11-04: when every live work session of an assignment is DONE but the assignment itself is
+ * still open, ask ONCE whether it was submitted -- never auto-complete it (only the owner marks DONE).
+ * Returns tag changes for parents: `ask:true` adds COMPLETE_ASKED_TAG and produces a question;
+ * `ask:false` removes a stale tag after new sessions were added, so a later completion asks again.
+ */
+export function planCompletionAsks(parents: ParentTask[], sessions: SessionTask[]): CompletionAsk[] {
+  const out: CompletionAsk[] = [];
+  for (const p of parents) {
+    if (!p.assignment_id || p.status === 'DONE' || p.completed_at) continue;
+    const live = sessions.filter((x) => parseSessionKey(x.assignment_id)?.assignmentId === p.assignment_id
+      && !(x.tags ?? []).includes(RETIRED_TAG));
+    const tags = p.tags ?? [];
+    const asked = tags.includes(COMPLETE_ASKED_TAG);
+    const allDone = live.length > 0 && live.every((x) => x.status === 'DONE' || !!x.completed_at);
+    if (allDone && !asked) out.push({ taskId: p.id, title: p.title, total: live.length, tags: [...tags, COMPLETE_ASKED_TAG], ask: true });
+    else if (!allDone && asked) out.push({ taskId: p.id, title: p.title, total: live.length, tags: tags.filter((t) => t !== COMPLETE_ASKED_TAG), ask: false });
+  }
+  return out;
+}
+
+export function buildCompletionAskLines(asks: CompletionAsk[]): string[] {
+  return asks.filter((a) => a.ask).map((a) =>
+    `• ✅ All ${a.total} work session${a.total === 1 ? '' : 's'} for ${a.title} are done. Is it submitted? Mark it done, or tell me how much more time it needs and I'll plan more sessions.`);
+}
+
 /** Compact, human-checkable view of the session plan (dry run + logs). */
 export function describeSessionPlan(plan: SessionPlan, tz: string) {
   const local = (iso: string | null) => iso

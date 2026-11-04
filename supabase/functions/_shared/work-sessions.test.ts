@@ -314,3 +314,45 @@ describe('P4 early warning', () => {
     assert.deepEqual(fits.parentTagPatches, [{ taskId: 'p-cp2', tags: [] }]);
   });
 });
+
+import { planCompletionAsks, buildCompletionAskLines, COMPLETE_ASKED_TAG } from './work-sessions.ts';
+
+describe('completion ask (owner 2026-11-04: ask once, never auto-complete)', () => {
+  const P = { id: 'p', title: '📚 Research Paper', status: 'UP_NEXT', completed_at: null, assignment_id: 'nx',
+    due_date: null, estimate_minutes: 180, tags: [] as string[] };
+  const S = (k: number, status = 'DONE', tags: string[] = ['work-session']) => ({ id: `s${k}`, title: `s${k}`, status,
+    completed_at: null, assignment_id: `nx::session-${k}`, start_time: null, end_time: null, estimate_minutes: 90, tags });
+
+  it('CA-1 every live session DONE and the assignment open: one ask, parent tagged', () => {
+    const asks = planCompletionAsks([P], [S(1), S(2)]);
+    assert.equal(asks.length, 1);
+    assert.equal(asks[0].ask, true);
+    assert.ok(asks[0].tags.includes(COMPLETE_ASKED_TAG));
+    assert.match(buildCompletionAskLines(asks)[0], /All 2 work sessions for 📚 Research Paper are done\. Is it submitted\?/);
+  });
+
+  it('CA-2 already asked: no repeat', () => {
+    assert.equal(planCompletionAsks([{ ...P, tags: [COMPLETE_ASKED_TAG] }], [S(1), S(2)]).length, 0);
+  });
+
+  it('CA-3 any session still open: no ask', () => {
+    assert.equal(planCompletionAsks([P], [S(1), S(2, 'UP_NEXT')]).length, 0);
+  });
+
+  it('CA-4 asked before, then new sessions added: tag removed so a later completion asks again', () => {
+    const asks = planCompletionAsks([{ ...P, tags: ['x', COMPLETE_ASKED_TAG] }], [S(1), S(3, 'UP_NEXT')]);
+    assert.deepEqual(asks.map((a) => [a.ask, a.tags]), [[false, ['x']]]);
+    assert.equal(buildCompletionAskLines(asks).length, 0);
+  });
+
+  it('CA-5 assignment already DONE, or no sessions at all: nothing', () => {
+    assert.equal(planCompletionAsks([{ ...P, status: 'DONE' }], [S(1)]).length, 0);
+    assert.equal(planCompletionAsks([P], []).length, 0);
+  });
+
+  it('CA-6 retired sessions do not count toward "all done"', () => {
+    const asks = planCompletionAsks([P], [S(1), S(2, 'UP_NEXT', ['work-session', 'session-not-needed'])]);
+    assert.equal(asks.length, 1);
+    assert.equal(asks[0].total, 1);
+  });
+});

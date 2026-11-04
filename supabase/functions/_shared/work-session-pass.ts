@@ -20,6 +20,7 @@ import { resolveConfig, resolveCategoryDailyCap, MAX_ASSIGNMENTS_PER_DAY } from 
 import { activityBusySlots } from './activities.ts';
 import {
   planWorkSessions, courseworkWindowsFor, resolveSessionConfig, isSessionTask, buildSessionWarningLines,
+  planCompletionAsks, buildCompletionAskLines,
   describeSessionPlan, type ParentTask, type SessionTask, type DayAvailability, type SessionPlan,
 } from './work-sessions.ts';
 
@@ -201,7 +202,21 @@ export async function runWorkSessionPass(supabase: any, opts: SessionPassOptions
     if (!error) result.written.tagged++;
   }
 
-  const lines = buildSessionWarningLines(plan, tz);
+  // All sessions done but the assignment still open: ask once (owner 2026-11-04), never auto-complete.
+  // Tags start from any patch written just above so the at-risk tag is not overwritten.
+  const patchedTags = new Map(plan.parentTagPatches.map((tp) => [tp.taskId, tp.tags]));
+  const asks = planCompletionAsks(
+    parents.map((p) => (patchedTags.has(p.id) ? { ...p, tags: patchedTags.get(p.id)! } : p)),
+    sessions,
+  );
+  const askedOk: typeof asks = [];
+  for (const a of asks) {
+    const { error } = await supabase.from('tasks').update({ tags: a.tags, updated_at: now.toISOString() })
+      .eq('id', a.taskId).neq('status', 'DONE').is('completed_at', null);
+    if (!error) { result.written.tagged++; askedOk.push(a); }
+  }
+
+  const lines = [...buildSessionWarningLines(plan, tz), ...buildCompletionAskLines(askedOk)];
   if (lines.length) result.written.warningQueued = await queueWarning(supabase, userId, lines, now, tz);
   return result;
 }
