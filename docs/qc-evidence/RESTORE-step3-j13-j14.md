@@ -178,3 +178,19 @@ Same setup as section 2 (import map: `deno.land/std` → typed `serve` stub, `es
 | `execute-tool/index.ts` | 20 | 20 | 20 | 20 |
 
 Fix on this branch: deno 2.9.6's stricter typed-array generics flagged `crypto.subtle.verify("HMAC", key, sig, …)` (TS2345: `Uint8Array<ArrayBufferLike>` is not a `BufferSource`). It is type-only, because `b64urlDecode` builds a plain `Uint8Array`. I changed it to `sig as BufferSource`, which both versions accept. `npm test` is still 612/612. The remaining send-push / manage-push / execute-tool errors are the pre-existing `.catch`-on-`PromiseLike` / implicit-any patterns, the same on both sides.
+
+### R6. Main moved again during this pass: second merge (O)
+- While I was checking, `origin/main` advanced to **`098fb97`** (#91 keyword-category limit, #92 conflict rules). I merged it with `git merge origin/main`: **no conflicts**. Main added `_shared/conflict-rules.ts` and changed `_shared/keyword-rules.ts` and `nightly-schedule-builder`. There is no `config.toml` change and no new function directory (still 52). Merge commit `49a1457`.
+- `npm test` after: **623 tests, 623 pass, 0 fail** (612 + main's 11 new).
+
+### R7. verify_jwt, live vs merged `config.toml`, all 52 repo functions (O)
+`list_edge_functions` (project `wwxgajrtmslzklnyplah`, 2026-11-04 ~19:12 UTC; 127 live functions, the whole 53,752-character result parsed as JSON) against `tomllib` over the merged `config.toml`. A function with no section gets the CLI default `true`.
+- **Mismatches: 0.** No repo function is missing live. One config section, `realtime-voice-assistant`, has no function directory; deploy ignores it.
+- The seven pins this PR first added are now on main too (`40ce8e1`). This PR's only remaining `config.toml` change is `[functions.alarm-action] verify_jwt = false`, which is what alarm-action runs with live.
+- Script output is saved at `/tmp/claude-0/-home-user/f93a6466-3dfd-5e65-a8de-e415ffea7464/scratchpad/vjwt-2026-11-04.txt` (session scratchpad, not durable). The table is reproduced here in summary: 51 functions `false`/`false`, and `calendar-integration-manager` `true`/`true`.
+
+### R8. Deploy blast radius, re-read from main's current workflow (O)
+- This PR still adds `_shared/` files (`action-token.ts`, `push-auth.ts`), so the merge push selects `mode=all`.
+- Main's all-mode (`1184f8d`) now runs `scripts/deploy-all-functions.sh`. It makes **one deploy call per function** and keeps going past a failure, then fails the job at the end. It **excludes `mcp`**, which bundles to 27 MB and gets HTTP 413. Every call passes `--yes` (`b6efe34`).
+- So merging redeploys **51** functions: every directory except `mcp`, which is not touched. The October item "mcp live source unreadable, inferred = main" no longer applies to this PR.
+- `alarm-action` live: v53, `updated_at` 2026-10-08 14:33:57 UTC (the version number moved from 36 to 53 without a code change, I, from the unchanged `updated_at`). Read with `get_edge_function` today: it differs from this branch only in one header comment line (live: "only DOING/DONE, for 7 days … setting the same status is a no-op") and in the type-only `sig as BufferSource` cast in its bundled `_shared/action-token.ts`.
