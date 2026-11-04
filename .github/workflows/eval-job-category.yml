@@ -1,0 +1,42 @@
+# WHAT:          Runs the JOB-category scorecard (scripts/eval-job-category.mjs) against the LIVE ai-task-parser
+#                and prints the result table to the job log.
+# WHY:           The scorecard must call the deployed parser, and the coding session's network cannot reach
+#                the project host (proxy CONNECT 403, measured 2026-11-04). A GitHub runner can.
+# SUPERSEDES:    nothing.  SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:      docs/qc-evidence/AC-job-category.md AC-D9/AC-D10.
+#
+# Writes nothing to the board: the script uses the parser's parse-only path (userId, no boardId).
+name: Eval JOB category scorecard
+
+on:
+  workflow_dispatch:
+    inputs:
+      label:
+        description: 'Name for this run (appears in the report title)'
+        required: false
+        default: 'live'
+      runs:
+        description: 'Calls per title (pass bar: owner-ruled rows right every time, others 2 of 3)'
+        required: false
+        default: '3'
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run the scorecard
+        env:
+          LABEL: ${{ inputs.label }}
+          RUNS: ${{ inputs.runs }}
+        run: |
+          node scripts/eval-job-category.mjs "$LABEL" "$RUNS"
+          echo '----- EVAL REPORT -----'
+          cat "docs/qc-evidence/EVAL-job-category-$LABEL.md"
+          echo '----- END EVAL REPORT -----'

@@ -79,7 +79,8 @@ describe('spelling table (owner map after the JOB relabel, a weekday unless stat
     ['J-1', 'Reply to my manager\'s email', 'JOB', 'email->business_hours'],    // email sorts before reply
   ];
   for (const [id, title, cat, want] of rows) {
-    it(`${id} "${title}" [${cat}] -> ${want}`, () => assert.equal(pick(title, cat), want));
+    // Plain test names (no quotes or arrows) so mutate.sh can find them in the runner's output.
+    it(`${id} keyword pick`, () => assert.equal(pick(title, cat), want, `${title} [${cat}]`));
   }
 
   it('S-21 a keyword whose window is closed today is passed over (Saturday)', () => {
@@ -88,7 +89,7 @@ describe('spelling table (owner map after the JOB relabel, a weekday unless stat
   it('S-17 a lane that is not a category ("TODO") applies to every category', () => {
     assert.equal(pick('Focus block', 'JOB', { focus: ['morning', 'TODO'] }), 'focus->morning');
   });
-  it('S-18 the lane compare ignores case: "job" is the JOB category', () => {
+  it('S-18 the lane compare ignores case so job is the JOB category', () => {
     const map = { work: ['business_hours', 'job'], workout: ['morning', 'LIFE'] };
     assert.equal(pick('Workout', 'LIFE', map as any), 'workout->morning');
   });
