@@ -1,5 +1,5 @@
 # Project Memory — journey-voice
-Last updated: 2026-10-27
+Last updated: 2026-11-04
 
 > **MOVE THE DATE ABOVE IN THE SAME COMMIT THAT APPENDS A SECTION.** It read `2026-09-21` while
 > this file already carried sections dated 2026-10-08 and 2026-10-12 — three weeks of the header
@@ -11,6 +11,13 @@ Last updated: 2026-10-27
 > convenience and is structurally the most likely thing here to be stale — so it is the one to
 > distrust, never the sections. `actions.md` has no file-level stamp at all, deliberately, for
 > the same reason: its ACT entries each carry their own date.
+
+## Active work — 2026-11-04: assignment spreading (ACT:assignment-spreading)
+- **Status: DEPLOYED, NOT owner-confirmed.** P1 Nexus intake + P2 weekend cap (#77, 62e8ae6, deploy 40887567471 success) and P3 work-session cards + P4 at-risk warning (#78, merged by owner 2026-11-03 → 0796822) are on main.
+- #78's own deploy run 41687535826 FAILED: supabase CLI `latest` now demands `--yes` without a TTY ("Confirmation required ... Nothing was changed"). Fixed by another session on `claude_deploy-cli-yes` (b6efe34) → main; every deploy since is green (dispatch 41758220778; pushes 41859348414..41876128270). **Hardening:** setup-cli `version: latest` means any CLI release can change prompt behaviour; every CLI write in CI must pass `--yes`.
+- Live board (Supabase SQL, 2026-11-04): Research Proposal DONE; Checkpoint 2 s1/s2 Wed Nov 4 / Thu Nov 5 7:00pm ET; Research Paper s1/s2 Wed Nov 4 / Thu Nov 5 8:30pm ET; parent cards unslotted by design.
+- Follow-on by another session: #87 (2d8a706) spreads on-time work across the window instead of front-loading tonight.
+- Open: Huddle "Open in journey" deep link (agent a96c3150edcd20624, huddle `claude_board-journey-deeplink`, resumed after the 10-29 restart). Then un-park: loss gate #125, phone reg #65 (owner must install APK 1.0.13 first), V2 #157, widget C last.
 
 ## Active work — 2026-10-27: recovery continued (ACT:parked-work-recovery)
 
