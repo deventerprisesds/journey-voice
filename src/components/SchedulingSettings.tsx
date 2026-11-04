@@ -380,6 +380,26 @@ const SchedulingSettings: React.FC = () => {
             />
             <Label htmlFor="assignment-sessions-enabled" className="text-sm">Spread assignments into work sessions</Label>
           </div>
+          <div className="space-y-2">
+            <Label className="text-sm">How sessions show on the board and list</Label>
+            <Select
+              value={(config.assignmentSessions ?? DEFAULT_SCHEDULING_CONFIG.assignmentSessions!).display ?? 'grouped'}
+              onValueChange={(v) => setConfig({
+                ...config,
+                assignmentSessions: {
+                  ...(config.assignmentSessions ?? DEFAULT_SCHEDULING_CONFIG.assignmentSessions!),
+                  display: v === 'separate' ? 'separate' : 'grouped',
+                },
+              })}
+            >
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="grouped">One card per assignment, sessions inside it</SelectItem>
+                <SelectItem value="separate">A separate card for every session</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">Calendar and Today always show each session as its own time block.</p>
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {([
               ['finishBufferDays', 'Finish this many days before due', 0, 30],

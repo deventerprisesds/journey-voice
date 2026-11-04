@@ -10,6 +10,8 @@ import TaskDetailModal from '@/components/TaskDetailModal';
 import ViewSwitcher, { ViewType } from '@/components/ViewSwitcher';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { loadUserSchedulingConfig } from '@/services/schedulingService';
+import { groupWorkSessions, resolveSessionDisplay, type SessionDisplay } from '@/lib/workSessions';
 
 const TasksPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -23,6 +25,21 @@ const TasksPage: React.FC = () => {
 
   // Unified task loader — live + historical
   const { tasks, loading, reload: handleTaskUpdate } = useUnifiedTasks();
+
+  // Board/list views show one card per assignment with its work sessions inside it, unless the owner
+  // switched Settings → Coursework Work Sessions to separate cards. Time views (Focus, Week) always
+  // show each session as its own block, so they get the ungrouped list.
+  const [sessionDisplay, setSessionDisplay] = useState<SessionDisplay>('grouped');
+  useEffect(() => {
+    if (!user?.id) return;
+    loadUserSchedulingConfig(user.id)
+      .then((cfg) => setSessionDisplay(resolveSessionDisplay(cfg)))
+      .catch(() => { /* keep the default */ });
+  }, [user?.id]);
+  const listTasks = React.useMemo(
+    () => (sessionDisplay === 'grouped' ? groupWorkSessions(tasks) : tasks),
+    [tasks, sessionDisplay],
+  );
 
   // Sync view with URL param
   useEffect(() => {
@@ -139,10 +156,10 @@ const TasksPage: React.FC = () => {
         ) : (
           <>
             {currentView === 'kanban' && (
-              <TabbedKanbanBoard tasks={tasks} onTaskUpdate={handleTaskUpdate} onTaskEdit={handleTaskEdit} />
+              <TabbedKanbanBoard tasks={listTasks} onTaskUpdate={handleTaskUpdate} onTaskEdit={handleTaskEdit} />
             )}
             {currentView === 'grid' && (
-              <TaskGridView tasks={tasks} onTaskEdit={handleTaskEdit} onStatusChange={handleStatusChange} />
+              <TaskGridView tasks={listTasks} onTaskEdit={handleTaskEdit} onStatusChange={handleStatusChange} />
             )}
             {currentView === 'focus' && (
               <FocusView tasks={tasks} onTaskEdit={handleTaskEdit} onStatusChange={handleStatusChange} onTaskUpdate={handleTaskUpdate} />

@@ -88,6 +88,8 @@ export interface SchedulingConfig {
     sessionMinutes: number;       // length of one work session (owner: 90)
     defaultEffortMinutes: number; // total effort when Nexus gives none (owner: 180)
     lateBufferHours: number;      // already inside the window: last session ends this long before due
+    /** Board/list display (owner 2026-11-04): one card per assignment (default) or one per session. */
+    display?: 'grouped' | 'separate';
   };
   /**
    * Recurring / one-off / on-demand ACTIVITIES (lunch, gym, church, haircut, 1:1s) — reserved time
@@ -151,6 +153,7 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
     sessionMinutes: 90,
     defaultEffortMinutes: 180,
     lateBufferHours: 1,
+    display: 'grouped',
   },
   categoryMappings: {
     CAREER: {

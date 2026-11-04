@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Progress } from '@/components/ui/progress';
+import WorkSessionSummary from '@/components/WorkSessionSummary';
 import { 
   Clock, 
   MapPin, 
@@ -316,6 +317,9 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
                   {task.title}
                 </h3>
               </div>
+              {(task as any).workSessions && (
+                <WorkSessionSummary summary={(task as any).workSessions} onOpenSession={onEdit} />
+              )}
               {task.assignment_url && (
                 <a
                   href={task.assignment_url}

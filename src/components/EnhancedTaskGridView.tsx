@@ -41,6 +41,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { Task } from '@/types/task';
 import SmartTaskInput from './SmartTaskInput';
+import WorkSessionSummary from './WorkSessionSummary';
 
 interface TaskGridViewProps {
   tasks: Task[];
@@ -1039,6 +1040,9 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
                                     )}>
                                       {renderEditableCell(task, 'title', task.title)}
                                     </div>
+                                    {(task as any).workSessions && (
+                                      <WorkSessionSummary summary={(task as any).workSessions} onOpenSession={onTaskEdit} />
+                                    )}
                                     {task.assignment_url && (
                                       <a
                                         href={task.assignment_url}
