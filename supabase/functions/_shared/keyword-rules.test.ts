@@ -143,6 +143,9 @@ describe('activeWindowNamesForDay (shared by scheduler and QC)', () => {
     assert.equal(pick('Family dinner', 'LIFE', AFTER, activeWindowNamesForDay(OWNER_WINDOWS, 6)), 'none');
     assert.equal(pick('Weekend hobby', 'LIFE', AFTER, activeWindowNamesForDay(OWNER_WINDOWS, 6)), 'hobby->weekends');
   });
+  it('Q-5 a window missing its start or end is never open (as the old builder dropped it)', () => {
+    assert.deepEqual(activeWindowNamesForDay({ evening: { end: 22, days: [2] } as any }, 2), []);
+  });
   it('Q-4 an empty or unknown task category is ungated, as before', () => {
     assert.equal(pick('Email the team', '', AFTER), 'email->business_hours');
     assert.equal(pick('Email the team', 'NOT_A_CATEGORY', AFTER), 'email->business_hours');
@@ -164,5 +167,7 @@ describe('both callers pass the task category into the shared rule', () => {
   it('W-2 the daily QC check passes task.category and the shared open-window rule', () => {
     assert.match(QC_SRC, /matchKeywordRule\(task\.title, keywords, \{\s*category: task\.category,/);
     assert.match(QC_SRC, /return activeWindowNamesForDay\(timeWindows, day\);/);
+    // ...and the call site actually passes it (verifier loop-2 G-1: dropping this argument left the suite green).
+    assert.match(QC_SRC, /activeWindowNames: activeWindowNamesOn\(task\.start_time, tz, config\.timeWindows\),/);
   });
 });

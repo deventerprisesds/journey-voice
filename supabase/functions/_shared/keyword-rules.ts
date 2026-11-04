@@ -80,7 +80,7 @@ export function activeWindowNamesForDay(
     if (isWeekend && name !== 'weekends') continue;
     if (!isWeekend && name === 'weekends') continue;
     if (!win?.days || !win.days.includes(dayOfWeek)) continue;
-    if (((win.end ?? 0) - (win.start ?? 0)) <= 0) continue;
+    if (typeof win.start !== 'number' || typeof win.end !== 'number' || win.end - win.start <= 0) continue;
     out.push(name);
   }
   return out;
