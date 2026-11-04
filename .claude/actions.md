@@ -669,6 +669,11 @@ never removed; keep everything editable in Settings; shared category list "a go 
 | 3 | 3 SDLC visuals + ops deck + ops diagrams → JOB | waiting on JOB enum value | owner ruling 2026-11-03 |
 | 4 | Acceptance criteria | **done**: 88 criteria, 33-row keyword spelling table, 27-title eval set, 19 open rulings | `docs/qc-evidence/AC-job-category.md` @977d2b7, deventerprisesds/journey-voice#80 |
 | 4b | Owner to confirm the slimmed Phase 1 scope (scope grew in the AC pass) | **asked, open** | — |
-| 5 | Build: JOB enum + mappings, classifier rules, keyword lane gate, shared category list, Huddle display | not started | — |
+| 5 | Owner go-ahead for Phase 1 ("go ahead and build phase 1 until done", 2026-11-04) | **given** | — |
+| 5a | Server/rules half: shared category list, keyword lane gate (scheduler + QC), resolveConfig fill, JOB/CAREER defaults, 13 keyword defaults → JOB, category AI guide (employer + name hints), write-path normalising, tool enums, migration | **implemented** on the branch; `npm test` 490/0; 9 mutations FIRED | d31aef1..52c759f; independent verifier running |
+| 5b | Screens: JOB on every list/style map, Job board tab before Career, Settings keyword lane dropdown | in progress (helper, own worktree, branch `claude_job-screens`) | — |
+| 5c | Huddle: JOB hue, label, order, Cole owns JOB, tool descriptions | in progress (helper) | — |
+| 5d | Scorecard (27 titles on the live parser) | script + manual workflow committed; runs after deploy (session network cannot reach the project host) | `scripts/eval-job-category.mjs`, `.github/workflows/eval-job-category.yml` |
+| 5e | Data rollout (5 tasks, Company=Trinnex, saved JOB/CAREER rows, keyword relabel, name hints) | written, NOT run | `docs/qc-evidence/ROLLOUT-job-category.sql` |
 | 6 | Owner: "Work on my SDLC app" = JOB or VENTURES? | **ruled: JOB by default**; owner may re-file a single task by hand | owner 2026-11-03 |
 | 7 | Owner sees JOB working in the app | **NOT confirmed** | — |
