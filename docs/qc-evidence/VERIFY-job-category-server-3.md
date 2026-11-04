@@ -51,3 +51,19 @@ The warn `[UPDATE_TASK] category "..." is not a category; kept the current one` 
 Observation outside the claim (L3-1, low, guard gap): no test asserts the new guard message (grep for
 `is not a category` / `No updatable fields` outside docs hits only source and unrelated comments), so reverting
 the message to the generic one leaves the suite green. Behaviour is correct today; it is simply unguarded.
+Mutation M-8 (`scripts/mutate.sh`, test cmd `npm test`): `error: categoryKept` -> `error: false` at line 1016
+(always the generic message) -> **INERT**, full suite green; restore asserted against HEAD. Not equivalent (the
+response text changes), so this measures L3-1: the D-4 message is correct but has no test.
+
+### G-1 -- W-2 now guards the QC call site's activeWindowNames argument -- **CONFIRMED**
+
+Observation: `keyword-rules.test.ts` W-2 adds
+`assert.match(QC_SRC, /activeWindowNames: activeWindowNamesOn\(task\.start_time, tz, config\.timeWindows\),/)`;
+the source line is `src/utils/dailyReviewPipeline.ts:516`, text identical.
+
+Mutation M-7 re-run (`scripts/mutate.sh`, anchor/replacement from files, test cmd `npm test`, must-fail `W-2`):
+`activeWindowNames: activeWindowNamesOn(task.start_time, tz, config.timeWindows),` -> `activeWindowNames: undefined,`
+-> **FIRED** ("'W-2' failed with the defect reinstated. The guard is real."), restored, matches HEAD, W-2 green
+again. Loop 2: INERT.
+Limit (inference, not a defect): W-2 is a source-text assertion, so a reformat of that line (line break inside
+the call) would also fail it -- a false red, never a false green.
