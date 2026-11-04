@@ -87,6 +87,7 @@ export interface ParentTask {
   board_id?: string | null;
   priority?: string | null;
   category?: string | null;
+  scheduling_context?: Record<string, any> | null;
 }
 
 export interface SessionTask {
@@ -183,7 +184,14 @@ function addDays(date: string, n: number): string {
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
 }
 const stripEmoji = (title: string) => title.replace(/^📚\s*/, '');
-export const sessionTitle = (parentTitle: string, k: number, m: number) => `📚 ${stripEmoji(parentTitle)} — session ${k} of ${m}`;
+/** `📚 Research Paper 1 of 4 (MGT-782)` -- owner 2026-11-04; the course code is omitted when unknown. */
+export const sessionTitle = (parentTitle: string, k: number, m: number, course?: string | null) =>
+  `📚 ${stripEmoji(parentTitle)} ${k} of ${m}${course && String(course).trim() ? ` (${String(course).trim()})` : ''}`;
+/** The course code the intake stamps on an assignment card (scheduling_context.source, e.g. "MGT-782"). */
+export const courseOf = (parent: { scheduling_context?: Record<string, any> | null }) => {
+  const src = parent.scheduling_context?.source;
+  return typeof src === 'string' && /^[A-Z]{2,5}-?\d{3}/i.test(src.trim()) ? src.trim() : null;
+};
 
 /** Subtract busy intervals from a window list; returns sorted free intervals. */
 export function freeIntervals(windows: Interval[], busy: Interval[]): Interval[] {
@@ -386,9 +394,18 @@ export function planWorkSessions(input: SessionPlanInput): SessionPlan {
       const feasible = window.filter((d) => (round === 0 ? !usedDates.has(d) : true) && fitsOn(d) !== null);
       const next: typeof rest = [];
       if (!feasible.length) { rest.forEach((s) => next.push(s)); rest = next; break; }
-      const picks = rest.length <= feasible.length
-        ? rest.map((_, i) => feasible[Math.floor((i * feasible.length) / rest.length)])
-        : feasible.slice();
+      // On-time work: evenly spaced CENTRES of the window, so 2 sessions over 4 weeks land ~week 1 and
+      // ~week 3 rather than tonight and tomorrow (owner 2026-11-04, "why is the output so bad"). The first
+      // one is pulled inside the calendar horizon so every assignment still progresses this week
+      // (AC-P3-2). Late work (finish-by already past) keeps front-loading: there is no slack left.
+      const n = feasible.length, k = rest.length;
+      const lastInHorizon = feasible.filter((d) => d <= horizonEnd).length - 1;
+      const pickIndex = (i: number) => {
+        if (late) return Math.floor((i * n) / k);
+        const centre = Math.floor(((i + 0.5) * n) / k);
+        return i === 0 && lastInHorizon >= 0 ? Math.min(centre, lastInHorizon) : centre;
+      };
+      const picks = k <= n ? rest.map((_, i) => feasible[Math.min(n - 1, pickIndex(i))]) : feasible.slice();
       rest.forEach((slot, i) => {
         // Walk forward from the ideal pick to the first day that still fits (earlier days stay free).
         const ideal = i < picks.length ? feasible.indexOf(picks[i]) : -1;
@@ -422,7 +439,7 @@ export function planWorkSessions(input: SessionPlanInput): SessionPlan {
       const placement: PlannedPlacement = { date: a.date, start: inHorizon ? toISO(a.iv.start) : null, end: inHorizon ? toISO(a.iv.end) : null };
       if (inHorizon) plan.placementsByDate[a.date] = (plan.placementsByDate[a.date] ?? 0) + 1;
       const key = sessionKey(aId, a.slot.index);
-      const title = sessionTitle(parent.title, a.slot.index, totalSessions);
+      const title = sessionTitle(parent.title, a.slot.index, totalSessions, courseOf(parent));
       ap.placed.push({ key, index: a.slot.index, date: a.date, start: placement.start, end: placement.end, kind: a.kind });
       const ctxSession = {
         parent_task_id: parent.id, index: a.slot.index, total: totalSessions, planned_date: a.date,

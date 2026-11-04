@@ -4,6 +4,7 @@ import {
   DEFAULT_TIME_WINDOWS,
   DEFAULT_CATEGORY_MAPPINGS,
   resolveConfig,
+  resolveCategoryWeights,
   activeCaveats,
   applyCaveats,
   validateTaskWindow,
@@ -268,6 +269,7 @@ serve(async (req) => {
       const config = userPref.config || {};
 
       const { timeWindows, categoryMappings } = resolveConfig(config);
+      const categoryWeights = resolveCategoryWeights(config);
       // Temporary caveat overlay — expired ones filtered here, so no cron is needed.
       const caveats = activeCaveats(config);
       if (caveats.length) {
@@ -1018,6 +1020,9 @@ serve(async (req) => {
             .filter(t => !scheduledTitles.has(t.title)) // Cross-day dedup by title
             .map(task => {
               let score = priorityWeight[task.priority] || 1;
+
+              // Category weight: which work wins a contested slot (owner: education over Ventures).
+              score += categoryWeights[String(task.category)] ?? 0;
               
               // Explicit user priority — base +10, rank bonus up to +5
               if ((task as any).is_priority) {
