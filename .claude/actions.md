@@ -656,26 +656,21 @@ Defect: the bulk deploy stopped at mcp's 413 (runs 39159443758, 40575132776). Ti
 - **Deploy was blocked estate-wide** by the latest Supabase CLI requiring `--yes` without a TTY (run 41687535826 secret sync; run 41692583533 50/50 deploy). Fixed by #81 (workflow) + #82 (`scripts/deploy-all-functions.sh`, test A1, mutate.sh FIRED). Dispatch run 41758220778 on `8bbef70`: **success**. Live `nightly-schedule-builder` v315 contains `runWorkSessionPass` + `activityBusySlots`.
 - **Status:** implemented + deployed, mechanism verified; **NOT confirmed live** — first session cards are created by the 05:00 UTC build. Check: `select title,start_time from tasks where assignment_id like '%::session-%'`.
 
-## ACT:job-category — a JOB lane for employer work, separate from CAREER (2026-11-03)
-Owner accepted a role at Trinnex. Rulings: JOB = employer work (business hours by default, editable in Settings);
-CAREER = next-role only; client work and own apps = VENTURES; Esri GIS / Power BI / SDLC / ops decks = JOB;
-NO employment start date ("a moot point, stop applying that logic"); keywords EXTENDED (lane gates the window),
-never removed; keep everything editable in Settings; shared category list "a go if no risk".
+## ACT:job-category — a JOB lane for employer work, separate from CAREER (2026-11-03 → shipped 2026-11-04)
+Owner rulings: JOB = employer work (Trinnex), business hours by default, editable in Settings; CAREER = next role;
+client work + own apps = VENTURES; Esri / Power BI / SDLC / ops decks = JOB; no start date; keywords extended
+(lane gates the window), never removed; shared category list.
 
 | # | Item | Status | Evidence |
 |---|---|---|---|
-| 1 | VENTURES windows weekends → evening + weekends (owner directive) | **live config written + read back** | `user_scheduling_prefs` row a3378f93…: `["evening","weekends"]`; not yet seen in a nightly run |
-| 2 | Re-sort CAREER tasks: 19 → VENTURES, 2 → PROF_EDUCATION, 1 → LIFE | **written + read back** (CAREER 60 → 38) | undo SQL kept in session scratchpad; ids listed there |
-| 3 | 3 SDLC visuals + ops deck + ops diagrams → JOB | waiting on JOB enum value | owner ruling 2026-11-03 |
-| 4 | Acceptance criteria | **done**: 88 criteria, 33-row keyword spelling table, 27-title eval set, 19 open rulings | `docs/qc-evidence/AC-job-category.md` @977d2b7, deventerprisesds/journey-voice#80 |
-| 4b | Owner to confirm the slimmed Phase 1 scope (scope grew in the AC pass) | **asked, open** | — |
-| 5 | Owner go-ahead for Phase 1 ("go ahead and build phase 1 until done", 2026-11-04) | **given** | — |
-| 5a | Server/rules half: shared category list, keyword lane gate (scheduler + QC), resolveConfig fill, JOB/CAREER defaults, 13 keyword defaults → JOB, category AI guide (employer + name hints), write-path normalising, tool enums, migration | **implemented** on the branch; `npm test` 490/0; 9 mutations FIRED | d31aef1..52c759f; independent verifier running |
-| 5b | Screens: JOB on every list/style map, Job board tab before Career, Settings keyword lane dropdown | **implemented, merged into the PR branch** (497 tests, tsc 27 = base, vite build ok, type-guard mutation FIRED) | 1b16529; `docs/qc-evidence/IMPL-job-screens.md` |
-| 5g | Verifier loop 1 findings D-1..D-5, N-1 | D-1..D-4 + N-1 **fixed** (4 more mutations FIRED); D-5 = apply the migration BEFORE merging (rollout order) | e3d7a38, b52af51, ffbdb8d; `VERIFY-job-category-server-1` on branch `claude_verify-job-category-server` |
-| 5c | Huddle: JOB hue, label, order, Cole owns JOB, tool descriptions | **implemented, PR open** (tests green, tsc 0) | deventerpriseds-org/huddle-extension-app#130 |
-| 5f | Phone priorities widget lists JOB | **committed**; reaches the phone only on the next Android build | f5f17f9 |
-| 5d | Scorecard (27 titles on the live parser) | script + manual workflow committed; runs after deploy (session network cannot reach the project host) | `scripts/eval-job-category.mjs`, `.github/workflows/eval-job-category.yml` |
-| 5e | Data rollout (5 tasks, Company=Trinnex, saved JOB/CAREER rows, keyword relabel, name hints) | written, NOT run | `docs/qc-evidence/ROLLOUT-job-category.sql` |
-| 6 | Owner: "Work on my SDLC app" = JOB or VENTURES? | **ruled: JOB by default**; owner may re-file a single task by hand | owner 2026-11-03 |
-| 7 | Owner sees JOB working in the app | **NOT confirmed** | — |
+| 1 | VENTURES windows → evening + weekends | **live** (read back) | user_scheduling_prefs owner row |
+| 2 | Re-sort 22 CAREER tasks (19 VENTURES, 2 PROF_EDUCATION, 1 LIFE) | **live** (read back) | undo SQL in session scratchpad |
+| 3 | JOB enum value | **live** | apply_migration `task_category_job`; enum_range shows JOB |
+| 4 | Code: shared list, keyword lane gate (scheduler + QC), resolveConfig fill, category AI guide, write-path normalising, screens, Settings lane dropdown | **merged + edge fns deployed** | deventerprisesds/journey-voice#80 (7dad873); deployed ai-task-parser v608, nightly-schedule-builder v319, execute-tool v523 read back |
+| 5 | Verification | 3 independent loops; loop 3: 0 refuted | `docs/qc-evidence/VERIFY-job-category-server-{1,2,3}.md`; 17 mutations FIRED |
+| 6 | Data: 5 tasks → JOB, Company = Trinnex, JOB row, CAREER → after_work+weekends, 13 keywords → JOB, 13 name hints | **live** (read back: 5 / Trinnex / 13 / 59 keywords) | `docs/qc-evidence/ROLLOUT-job-category.sql` |
+| 7 | Huddle: Job before Career, hue 200, Cole owns JOB | **merged + SWA deploy success** | deventerpriseds-org/huddle-extension-app#130 (18778f6) |
+| 8 | journey→Huddle sync carries JOB | **verified live** (Test- task synced as JOB, deleted, 0 left; 5 owner tasks JOB in mirror) | — |
+| 9 | Scorecard on the live parser | 26/27 both runs; E-21 "Write the SDLC doc for Sidecar" 0/3 → 2/3 after #86 | eval runs 41871280229, 41876505166 |
+| 10 | Owner sees Job tab / Settings rows / dropdowns in TaskOS; Job row in Huddle | **NOT confirmed** (Lovable deploy, owner hard-refresh needed) | — |
+| 11 | Phone widget JOB | reaches phone on next Android build | f5f17f9 |
