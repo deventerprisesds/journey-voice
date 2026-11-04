@@ -6,6 +6,7 @@ import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, activeCaveats } from "../_shared/scheduling-defaults.ts";
 import { runDedup, finalizeDedup, undoDedupSkips, type DedupLogEntry } from "../_shared/task-dedup.ts";
+import { updateCalendarEvent, deleteCalendarEvent, makeSupabaseCalendarEditDeps } from "../_shared/calendar-edit.ts";
 
 // ── Rollback Flag for shared topic ranking ──────────────────────────
 const USE_SHARED_TOPICS = true;
@@ -415,6 +416,14 @@ async function executeToolCall(
       
       case 'create_calendar_event':
         return await createCalendarEvent(supabase, userId, args, context.userProfile);
+
+      case 'update_calendar_event':
+        return calendarEditResponse(await updateCalendarEvent(
+          makeSupabaseCalendarEditDeps(supabase, (k) => Deno.env.get(k), fetch), userId, args ?? {}));
+
+      case 'delete_calendar_event':
+        return calendarEditResponse(await deleteCalendarEvent(
+          makeSupabaseCalendarEditDeps(supabase, (k) => Deno.env.get(k), fetch), userId, args ?? {}));
       
       case 'initiate_phone_call':
       case 'Phone_Call':
@@ -2337,6 +2346,16 @@ async function createGoogleEvent(supabase: any, userId: string, args: any, userP
   } catch (error) {
     return { success: false, error: extractErrorMessage(error) };
   }
+}
+
+/** Shape a calendar-edit ToolResult as an ExecuteToolResponse. `result` carries candidates /
+ *  nearby / needs_user_request so the model can ask the user which event, or for consent. */
+function calendarEditResponse(r: Record<string, unknown> & { success: boolean }): ExecuteToolResponse {
+  return {
+    success: r.success,
+    result: r,
+    ...(r.success ? { message: String(r.message ?? 'Done.') } : { error: String(r.error ?? 'Calendar edit failed.') }),
+  };
 }
 
 async function createCalendarEvent(supabase: any, userId: string, args: any, userProfile?: any): Promise<ExecuteToolResponse> {
