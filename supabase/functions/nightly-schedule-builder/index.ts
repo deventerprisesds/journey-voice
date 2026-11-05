@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { resolveConflictRules, conflictWeightOf } from "../_shared/conflict-rules.ts";
+import { nightlySetting, skipNightlyRun } from '../_shared/nightly-switch.ts';
 import { pendingIdsForDay } from "../_shared/per-day-rebuild.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
@@ -271,6 +272,16 @@ serve(async (req) => {
       const userId = userPref.user_id;
       const timezone = userPref.timezone || 'America/New_York';
       const config = userPref.config || {};
+
+      // Per-account nightly switch (Settings → Scheduling). Default ON; only a literal false turns the
+      // SCHEDULED run off — an asked-for rebuild still runs. See _shared/nightly-switch.ts.
+      const nightly = nightlySetting(config);
+      if (skipNightlyRun(config, triggerSource)) {
+        console.log(`⏸️ Nightly schedule is switched off for ${userId}${nightly.label ? ` (${nightly.label})` : ''} — skipping`);
+        results[userId] = { skipped: 'nightly_schedule_off', label: nightly.label };
+        continue;
+      }
+      if (nightly.label) console.log(`🏷️ Account ${userId}: ${nightly.label}`);
 
       const { timeWindows, categoryMappings } = resolveConfig(config);
       const categoryWeights = resolveCategoryWeights(config);

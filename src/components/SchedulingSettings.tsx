@@ -542,6 +542,30 @@ const SchedulingSettings: React.FC = () => {
         </CardContent>
       </Card>
 
+      {/* Nightly build on/off for THIS account (default on). Contract: _shared/nightly-switch.ts */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Nightly schedule</CardTitle>
+          <CardDescription>
+            When on, the scheduler rebuilds this account's week every night. Turning it off stops only the
+            nightly run; asking for a reschedule still works.
+            {config.nightlySchedule?.label ? ` This account: ${config.nightlySchedule.label}.` : ''}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={config.nightlySchedule?.enabled !== false}
+              onChange={(e) =>
+                setConfig({ ...config, nightlySchedule: { ...(config.nightlySchedule ?? {}), enabled: e.target.checked } })
+              }
+            />
+            Build my schedule each night
+          </label>
+        </CardContent>
+      </Card>
+
       {/* Conflict rules: who wins when tasks want the same time (owner-defined, no seeds) */}
       <ConflictRulesSettings
         rules={config.conflictRules ?? []}
