@@ -1,5 +1,7 @@
 # RESTORE step 3 — security follow-up to VERIFY C2-SEC1 (who may receive / mint alarm action tokens)
 
+> **STALE-FACT STAMP 2026-11-05:** every "the migration is not applied" line below is out of date. `20261027210000_push_subscriptions_rls_lockdown` IS applied live (`schema_migrations.created_by = github-actions:apply-supabase-migration`; policies = owner SELECT + service_role ALL). The current consolidated change list is in `RESTORE-step3-j13-j14.md`, under "What will no longer be in place — REFRESHED 2026-11-05".
+
 WHAT: the record of closing (or handing to the owner) VERIFY-restore-j13-alarm-actions-1's C2-SEC1 on PR #65: who calls `manage-push-subscription` and `send-push-notification`, with which credential, and what was enforced as a result.
 WHY: C2-SEC1 REFUTED "an action token authorises exactly one task for one user". Both functions are `verify_jwt = false` and take `userId` from the body, so (1) anyone can register a device under the owner's id and receive 7-day tokens that change the owner's tasks, (2) anyone can POST send-push with any `{userId, data:{taskId}}` and get a token minted for a task that is not that user's, (3) J14's "one device, one owner" dedupe lets anyone who knows a device token delete other users' rows for it.
 SUPERSEDES: nothing. SUPERSEDED-BY: nothing — current.
