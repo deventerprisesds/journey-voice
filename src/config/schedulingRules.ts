@@ -111,6 +111,11 @@ export interface SchedulingConfig {
    * Backend contract: supabase/functions/_shared/conflict-rules.ts (resolveConflictRules).
    */
   conflictRules?: ConflictRule[];
+  /**
+   * Per-account switch for the NIGHTLY build, plus an optional label for the account. Absent = on.
+   * Backend contract: supabase/functions/_shared/nightly-switch.ts (skipNightlyRun).
+   */
+  nightlySchedule?: { enabled?: boolean; label?: string };
 }
 
 export type ConflictMatch =
@@ -386,6 +391,10 @@ export function mergeSchedulingConfig(
     categoryWeights: { ...DEFAULT_SCHEDULING_CONFIG.categoryWeights!, ...(userConfig.categoryWeights ?? {}) },
     // Owner rules only; never seeded. A save of an unrelated setting must not drop them.
     conflictRules: Array.isArray(userConfig.conflictRules) ? userConfig.conflictRules : [],
+    // Same pass-through rule: dropping it on an unrelated save would silently switch an account back on.
+    nightlySchedule: userConfig.nightlySchedule && typeof userConfig.nightlySchedule === 'object'
+      ? { ...userConfig.nightlySchedule }
+      : undefined,
     // Same pass-through rule — but UNDEFINED when never saved, so the seed keeps applying and a save
     // of an unrelated setting never writes an empty list that would erase lunch.
     activities: Array.isArray(userConfig.activities) ? userConfig.activities : undefined,
