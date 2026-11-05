@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { resolveConflictRules, conflictWeightOf } from "../_shared/conflict-rules.ts";
+import { pendingIdsForDay } from "../_shared/per-day-rebuild.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
   DEFAULT_TIME_WINDOWS,
@@ -395,6 +396,13 @@ serve(async (req) => {
         // STEP 1.1: CLEAR FUTURE-SCHEDULED TASKS (rebuild, not append)
         // In single-day mode, only clear TODAY's tasks. In full mode, clear entire 7-day horizon.
         // ==========================================
+        // Horizon tasks awaiting their day's rebuild: task id -> the start_time they had before this run.
+        const pendingRebuild = new Map<string, string>();
+        /** PostgREST filter: unscheduled, OR still on its pre-run slot awaiting rebuild (so it stays a candidate). */
+        const unscheduledOrPending = () => {
+          const ids = [...pendingRebuild.keys()];
+          return ids.length ? `is_scheduled.eq.false,id.in.(${ids.join(',')})` : 'is_scheduled.eq.false';
+        };
         if (!singleDay) {
           const horizonEnd = new Date(now);
           horizonEnd.setDate(horizonEnd.getDate() + 7);
@@ -409,28 +417,20 @@ serve(async (req) => {
             .gte('start_time', now.toISOString())
             .lt('start_time', horizonEnd.toISOString());
 
-          let clearedFutureCount = 0;
+          // PER-DAY REBUILD (owner-approved 2026-11-05): do NOT clear the whole horizon up front. A run cut
+          // off by the edge-function time limit (2026-11-04 11:54Z) left every day it had not reached EMPTY.
+          // Record the horizon's tasks here; each day's leftovers are cleared just before that day is filled
+          // (clearPendingDay). Until then they stay on their old slot AND are candidates, so a later-day task
+          // can still be pulled earlier. Calendar copies are still removed up front so a moved task never
+          // leaves a duplicate event; a cut-off run keeps journey's schedule, the calendar catches up next run.
           if (!futureError && futureTasks && futureTasks.length > 0) {
-            // Delete app-originated calendar events before clearing
             await deleteAppOriginatedEvents(supabase, userId, futureTasks);
-
-            for (const ft of futureTasks) {
-              const { error: clearError } = await supabase
-                .from('tasks')
-                .update({
-                  start_time: null,
-                  end_time: null,
-                  is_scheduled: false,
-                  external_event_id: null,
-                  updated_at: now.toISOString(),
-                })
-                .eq('id', ft.id);
-
-              if (!clearError) {
-                clearedFutureCount++;
-              }
+            const withEvents = futureTasks.filter((ft: any) => ft.external_event_id).map((ft: any) => ft.id);
+            if (withEvents.length) {
+              await supabase.from('tasks').update({ external_event_id: null }).in('id', withEvents);
             }
-            console.log(`  🔄 Cleared ${clearedFutureCount} future-scheduled tasks for rebuild`);
+            for (const ft of futureTasks) pendingRebuild.set(ft.id, ft.start_time);
+            console.log(`  🔄 ${pendingRebuild.size} future-scheduled tasks queued for per-day rebuild`);
           }
         } else {
           // Single-day: only clear today's scheduled tasks
@@ -673,7 +673,7 @@ serve(async (req) => {
           .not('assignment_id', 'is', null)
           .not('status', 'in', '("DONE","BLOCKED")')
           .is('completed_at', null)
-          .is('is_scheduled', false)
+          .or(unscheduledOrPending())
           .not('tags', 'cs', '{parking-lot}'); // parking-lot opts a task OUT of nightly scheduling (ACT-13)
 
         const urgentMs = ASSIGNMENT_URGENT_HOURS * 60 * 60 * 1000;
@@ -708,6 +708,26 @@ serve(async (req) => {
         // ==========================================
         const scheduledTaskIds = new Set<string>();
         const scheduledTitles = new Set<string>();
+
+        /**
+         * Clear THIS day's leftover pre-run placements just before the day is filled (per-day rebuild).
+         * Skips tasks already re-placed earlier in this run. Idempotent per day.
+         */
+        const clearedRebuildDays = new Set<string>();
+        async function clearPendingDay(isoDay: string): Promise<number> {
+          if (singleDay || clearedRebuildDays.has(isoDay)) return 0;
+          clearedRebuildDays.add(isoDay);
+          const b = localDateToUtcBounds(isoDay, timezone);
+          const ids = pendingIdsForDay(pendingRebuild, b, scheduledTaskIds);
+          if (!ids.length) return 0;
+          const { data, error } = await supabase.from('tasks')
+            .update({ start_time: null, end_time: null, is_scheduled: false, updated_at: now.toISOString() })
+            .in('id', ids).eq('is_scheduled', true).neq('status', 'DONE').select('id');
+          if (error) { console.warn(`    ⚠️ per-day clear failed for ${isoDay}:`, error.message); return 0; }
+          for (const id of ids) pendingRebuild.delete(id);
+          console.log(`    🔄 Cleared ${data?.length ?? 0} of ${isoDay}'s previous placements for rebuild`);
+          return data?.length ?? 0;
+        }
         const accumulatedBusySlots: Array<{ start_time: string; end_time: string }> = [];
         const dailyAssignmentCount: Record<string, number> = {}; // targetISO → assignment count placed
         const tierAResults = { categoryPlaced: 0, flexiblePlaced: 0, deferred: 0 };
@@ -742,6 +762,7 @@ serve(async (req) => {
             const activeNames = Object.keys(active);
             if (activeNames.length === 0) continue;
 
+            await clearPendingDay(isoDay);
             const bounds = _ldub(isoDay, timezone);
             const { data: dayScheduled } = await supabase
               .from('tasks').select('start_time, end_time, estimate_minutes')
@@ -895,6 +916,7 @@ serve(async (req) => {
           const isWeekend = targetDayOfWeek === 0 || targetDayOfWeek === 6;
           
           console.log(`\n  📅 === Day ${dayOffset + 1}/${totalDays}: ${targetISO} (day ${targetDayOfWeek}${isWeekend ? ' WEEKEND' : ''}) ===`);
+          await clearPendingDay(targetISO);
 
           // STEP 2: COMPUTE WINDOW CAPACITY for this day
           const activeWindows = getActiveWindows(timeWindows, targetDayOfWeek);
@@ -984,7 +1006,7 @@ serve(async (req) => {
             .select('id')
             .eq('user_id', userId)
             .in('status', ['READY', 'UP_NEXT', 'TODO', 'BACKLOG'])
-            .is('is_scheduled', false)
+            .or(unscheduledOrPending())
             .is('completed_at', null)
             .not('title', 'ilike', '%Test Task%')
             .not('tags', 'cs', '{parking-lot}'); // parking-lot opts OUT of nightly scheduling (ACT-13)
@@ -1005,7 +1027,7 @@ serve(async (req) => {
             .in('id', allCandidateIds)
             .not('status', 'in', '("DONE","BLOCKED")')
             .not('title', 'ilike', '%Test Task%')
-            .is('is_scheduled', false)
+            .or(unscheduledOrPending())
             .is('completed_at', null)
             .not('tags', 'cs', '{parking-lot}') // parking-lot opts OUT of nightly scheduling (ACT-13)
             .order('created_at', { ascending: true });
