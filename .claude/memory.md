@@ -1,5 +1,5 @@
 # Project Memory — journey-voice
-Last updated: 2026-11-04
+Last updated: 2026-11-05
 
 > **MOVE THE DATE ABOVE IN THE SAME COMMIT THAT APPENDS A SECTION.** It read `2026-09-21` while
 > this file already carried sections dated 2026-10-08 and 2026-10-12 — three weeks of the header
@@ -11,6 +11,12 @@ Last updated: 2026-11-04
 > convenience and is structurally the most likely thing here to be stale — so it is the one to
 > distrust, never the sections. `actions.md` has no file-level stamp at all, deliberately, for
 > the same reason: its ACT entries each carry their own date.
+
+## Active work — 2026-11-05: one paper a night + parked lanes
+- **One paper a night (owner 2026-11-04):** journey #93 merged 053967d, deploy 41895671531 success. `planWorkSessions` allows sessions of at most one paper-type assignment per day; titles matching `config.assignmentSessions.finiteTypeKeywords` (reading, chapter, PowerPoint, slides, presentation…) are finite and may share; a hand-moved paper session pre-claims its night. Settings switch `onePaperPerDay` + word list. Live board 2026-11-05 shows no two-paper night. NOT owner-confirmed.
+- **Seen, not fixed:** a missed session keeps its original index when re-placed, so "2 of 2" can come before "1 of 2" on the board.
+- **Parked lanes resumed** after two container restarts: loss gate eds-claude-skills #125 (guards red on intermediate pushes; lane must end green) and journey #65 (CI green at 12efbda; must NOT merge before owner installs APK 1.0.13).
+- **Hardening:** container restarts killed background lanes twice in 24h. Briefs already require commit+push per step, which is why nothing was lost; resume via SendMessage, never re-spawn.
 
 ## Active work — 2026-11-04: assignment spreading (ACT:assignment-spreading)
 - **Status: DEPLOYED, NOT owner-confirmed.** P1 Nexus intake + P2 weekend cap (#77, 62e8ae6, deploy 40887567471 success) and P3 work-session cards + P4 at-risk warning (#78, merged by owner 2026-11-03 → 0796822) are on main.
