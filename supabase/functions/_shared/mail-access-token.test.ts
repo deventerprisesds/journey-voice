@@ -17,7 +17,8 @@ function fakeDb(rows: unknown[], refresh = "rt-1") {
     eq: (col: string, v: unknown) => { if (col === "user_id") calls.eqUser = String(v); return q; },
     in: () => q,
     update: () => { calls.update++; return q; },
-    then: (res: (v: unknown) => void) => res({ data: rows.filter((r: any) => r.user_id === calls.eqUser) }),
+    // Like the real table: no user filter -> every user's rows come back.
+    then: (res: (v: unknown) => void) => res({ data: calls.eqUser ? rows.filter((r: any) => r.user_id === calls.eqUser) : rows }),
   };
   return {
     calls,
