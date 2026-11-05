@@ -21,6 +21,24 @@
   -- merge main into a working branch before dispatching from it. `pg_net` is already enabled; async HTTP responses land in `net._http_response`.
   The vault is empty — don't rely on it.
 
+## Phone push registration — which app registers how (verified 2026-11-05 by reading the code)
+Both Android apps are built from `deventerprisesds/android-bridge-template`, but they register their
+phone for push by DIFFERENT routes with DIFFERENT credentials. Any change to who may register a device
+(e.g. journey #65's "registration needs the user's own login") must be checked against BOTH rows.
+
+| App (config id in android-bridge-template `configs/`) | How the phone registers | Credential journey receives |
+|---|---|---|
+| **TaskOS** (journey's app, `54beaa01-…`) | native `FcmRegistrar.kt` → journey `manage-push-subscription` `{action: subscribe_fcm}` (plus the web view's own registration) | **the user's own login token** (`Bearer <access_token>`) since android-bridge-template #20 (2026-11-05); before that the public anon key |
+| **Huddle** (`8596e6c2-…`) | Huddle web → Huddle server → journey `huddle-proxy` → `execute-tool` `register_push_token`. Huddle's web side never calls `secureStore`, so the native `FcmRegistrar` ships but does nothing there | **the journey server's own service-role key** — `huddle-proxy/index.ts` (~line 199) calls `execute-tool` with `Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}` |
+
+- **Consequence:** a server change that refuses the anon key affects TaskOS only (needs a TaskOS rebuild
+  first); Huddle is unaffected as long as `register_push_token` keeps accepting the service role.
+- **App version numbers are per app.** "1.0.13" was both a Huddle release and an unmerged TaskOS test
+  build. Always name the app, the config id, and the commit a build came from.
+- **How to rebuild one app:** `build-apk.yml` runs on a push to `main` that changes one
+  `configs/<id>/bridge.config.json` (it builds only the app changed in the LAST commit). Bump that
+  file's `_buildTriggeredAt` in its own commit; the workflow bumps the version and writes it back.
+
 ## Huddle task-sync (this repo's outbound half)
 journey mirrors every task change to the **Huddle** app so Huddle can prioritize
 supabase-independently. This repo owns the **outbound** half:
