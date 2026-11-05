@@ -24,7 +24,8 @@ export type MailTokenResult =
 /** Pure: the AADSTS code Microsoft put in a token-endpoint error, mapped to what the caller can do. */
 export function classifyTokenError(body: string): "consent_required" | "refresh_failed" {
   // AADSTS65001: consent missing. AADSTS90094 / 90095: admin approval required (employer tenant).
-  return /AADSTS(65001|90094|90095)/.test(body) ? "consent_required" : "refresh_failed";
+  // Written as alternatives, not AADSTS(...): the repo's undef-check reads "AADSTS(" as a call.
+  return /AADSTS65001|AADSTS90094|AADSTS90095/.test(body) ? "consent_required" : "refresh_failed";
 }
 
 // deno-lint-ignore no-explicit-any
