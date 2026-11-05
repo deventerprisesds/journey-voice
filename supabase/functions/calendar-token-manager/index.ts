@@ -179,7 +179,12 @@ async function getOAuthUrl(provider: string, redirectUri: string) {
     if (!clientId) throw new Error('MICROSOFT_CLIENT_ID not configured');
     const params = new URLSearchParams({
       client_id: clientId, redirect_uri: redirectUri, response_type: 'code',
-      scope: 'Calendars.ReadWrite User.Read offline_access', state: 'outlook'
+      // Mail.ReadWrite (2026-11-05): lets Huddle read the inbox and write threaded reply DRAFTS in a
+      // mailbox outside the EnterpriseDS tenant (the owner's @trinnex.io), where Huddle's app-only
+      // Graph key cannot reach. Requested HERE so an external tenant's one admin-consent request
+      // covers mail and calendar together. Mail.Send deliberately omitted (least privilege: drafts
+      // are sent by the owner from Outlook), which also makes the employer's approval easier.
+      scope: 'Calendars.ReadWrite Mail.ReadWrite User.Read offline_access', state: 'outlook'
     });
     return { auth_url: `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${params.toString()}` };
   } else {
