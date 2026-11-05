@@ -7,7 +7,6 @@ import { CATEGORY_KEYS, normalizeCategory, recognizeCategory } from "../_shared/
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, activeCaveats } from "../_shared/scheduling-defaults.ts";
 import { mintCaller } from "../_shared/push-auth.ts";
-import { getMailAccessToken } from "../_shared/mail-access-token.ts";
 import { runDedup, finalizeDedup, undoDedupSkips, type DedupLogEntry } from "../_shared/task-dedup.ts";
 import { updateCalendarEvent, deleteCalendarEvent, makeSupabaseCalendarEditDeps } from "../_shared/calendar-edit.ts";
 
@@ -451,12 +450,6 @@ async function executeToolCall(
       // sender/registration. Mirrors manage-push-subscription's `subscribe_fcm`. Not advertised to LLMs.
       case 'register_push_token':
         return await registerPushToken(supabase, userId, args);
-
-      // Internal, SERVER ONLY: a short-lived Graph mail+calendar token for one of the user's OWN
-      // connected Outlook accounts (e.g. a work mailbox in another tenant). Gated to the service-role
-      // caller above; Huddle additionally keeps it away from every model path. Not advertised to LLMs.
-      case 'get_mail_access_token':
-        return await getMailAccessToken(supabase, userId, args);
 
       // ============ SEARCH TOOLS ============
       case 'web_search':
@@ -3369,10 +3362,11 @@ serve(async (req) => {
     // needs a caller that proves itself (owner-approved Option A, 2026-10-27): the service-role key
     // (huddle-proxy, after its own JOURNEY_PROXY_TOKEN check, resolves the user server-side) or the
     // user's own login. The anon key / another user's JWT / no bearer -> 401.
-    // A mail access token is a credential: ONLY the service role (huddle-proxy, after its own
-    // JOURNEY_PROXY_TOKEN check) may mint one. A user JWT, the anon key or no bearer -> 401.
-    if (toolName === 'get_mail_access_token' && (await mintCaller(req, supabase, userId, SUPABASE_SERVICE_KEY)) !== 'service_role') {
-      console.warn('[EXECUTE-TOOL] get_mail_access_token refused: caller is not the service role');
+    // A mail access token is a credential and is NEVER minted here: journey's own model executors
+    // call this function with the service-role key and a model-chosen tool name. It lives in
+    // huddle-proxy behind JOURNEY_PROXY_TOKEN. Refused for every caller, service role included.
+    if (toolName === 'get_mail_access_token') {
+      console.warn('[EXECUTE-TOOL] get_mail_access_token refused: only huddle-proxy mints mail tokens');
       return new Response(JSON.stringify({ success: false, error: 'unauthorized' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
