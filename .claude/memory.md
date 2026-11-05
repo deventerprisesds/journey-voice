@@ -1,5 +1,5 @@
 # Project Memory — journey-voice
-Last updated: 2026-10-27
+Last updated: 2026-11-05
 
 > **MOVE THE DATE ABOVE IN THE SAME COMMIT THAT APPENDS A SECTION.** It read `2026-09-21` while
 > this file already carried sections dated 2026-10-08 and 2026-10-12 — three weeks of the header
@@ -11,6 +11,27 @@ Last updated: 2026-10-27
 > convenience and is structurally the most likely thing here to be stale — so it is the one to
 > distrust, never the sections. `actions.md` has no file-level stamp at all, deliberately, for
 > the same reason: its ACT entries each carry their own date.
+
+
+## Nightly scheduling: assignment work spread over time + account switch (#77-#96, 2026-11-04/05; owner NOT yet confirmed in the app)
+- Coursework source = Nexus `content.assignments` (#77); journey `public.assignments` is stale since 2026-04-06.
+- Work sessions `📚 <title> k of m (<course>)` spread before finish-by (#78, #87); Activities count as busy (PASS-3b).
+- Conflict rules `config.conflictRules` (#92); owner rule: coursework weight 10. Old `categoryWeights` +20 education seed
+  stays ON until the owner turns it off ("better than nothing").
+- Per-category `keywordsCanLeaveWindows` (#91); VENTURES=false, so Ventures never leak into daytime.
+- Per-day rebuild (#94): STEP 1.1 no longer empties the week up front; each day clears its own leftovers when reached.
+  cron job 11 = one POST per account. Verified live 2026-11-05 18:46Z (7/7 days, no day lost blocks).
+- Per-account nightly switch `config.nightlySchedule = {enabled,label}` (#96), default ON, cron runs only.
+  Data 2026-11-05: madison (`cce61d43`) OFF; demo `00000000-…-0001` labelled "DEMO MODE placeholder", left on.
+  Verified live: madison cron run -> `skipped: nightly_schedule_off`.
+- **TRAP — two account-linking systems.** `public.user_email_aliases` (von.ellis@ -> dev@ account `a3378f93`) is read
+  ONLY by `huddle-proxy` (Huddle's Entra sign-in). journey's own Google sign-in (`src/pages/Auth.tsx`, Supabase Auth)
+  never reads it, so signing in to journey as von.ellis@ on 2026-08-01 created a SEPARATE auth user `4132de9e`
+  (0 tasks). "The emails are linked" is true in the alias table and false in Supabase Auth. Check BOTH.
+- Hardening: answered "which accounts / are they linked" from `auth.identities` alone and missed the alias table;
+  the owner had to say "look deeper". Grep for every table holding emails (`information_schema.columns`) first.
+- Unmerged: `claude_grouped-sessions` (one card with "1 of x" blocks, option B default). Snapshots
+  `_sched_snapshot_2026110*` to drop later.
 
 ## JOB category, Phase 1 — SHIPPED 2026-11-04 (#80 + #86 merged, edge fns deployed, data applied; owner NOT yet confirmed in the app)
 Owner accepted a role at Trinnex. **JOB** = employer work (business hours by default); **CAREER** = next role
