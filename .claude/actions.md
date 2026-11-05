@@ -675,3 +675,6 @@ client work + own apps = VENTURES; Esri / Power BI / SDLC / ops decks = JOB; no 
 | 10 | Owner sees Job tab / Settings rows / dropdowns in TaskOS; Job row in Huddle | **NOT confirmed** (Lovable deploy, owner hard-refresh needed) | — |
 | 11 | Phone widget JOB | reaches phone on next Android build | f5f17f9 |
 | 12 | Owner re-ruling 2026-11-04: SDLC work naming an own product ("SDLC doc for Sidecar") = VENTURES; unnamed SDLC = JOB | **merged + deployed**, scorecard 27/27 | deventerprisesds/journey-voice#89 (d25124e) |
+
+| 13 | Owner 2026-11-05: control in Settings which accounts the nightly schedule runs for; demo labelled, madison off | **merged + deployed + verified live** (madison skipped, demo ran) | deventerprisesds/journey-voice#96 (c64e4b2) |
+| 14 | Owner 2026-11-05: von.ellis@ and dev@ "must be linked" | **OPEN — decision**: linked in `user_email_aliases` (Huddle) but NOT in journey's Supabase Auth (separate account 4132de9e) | memory.md "two account-linking systems" |
