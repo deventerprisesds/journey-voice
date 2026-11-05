@@ -194,3 +194,40 @@ Fix on this branch: deno 2.9.6's stricter typed-array generics flagged `crypto.s
 - Main's all-mode (`1184f8d`) now runs `scripts/deploy-all-functions.sh`. It makes **one deploy call per function** and keeps going past a failure, then fails the job at the end. It **excludes `mcp`**, which bundles to 27 MB and gets HTTP 413. Every call passes `--yes` (`b6efe34`).
 - So merging redeploys **51** functions: every directory except `mcp`, which is not touched. The October item "mcp live source unreadable, inferred = main" no longer applies to this PR.
 - `alarm-action` live: v53, `updated_at` 2026-10-08 14:33:57 UTC (the version number moved from 36 to 53 without a code change, I, from the unchanged `updated_at`). Read with `get_edge_function` today: it differs from this branch only in one header comment line (live: "only DOING/DONE, for 7 days … setting the same status is a no-op") and in the type-only `sig as BufferSource` cast in its bundled `_shared/action-token.ts`.
+
+### R9. Third merge, and the live state this PR would land on (O)
+- Main moved again to **`053967d`** (#93, `_shared/work-sessions` + settings). I merged it with no conflicts: merge commit `12efbda`. `npm test` **630/630**. Two container restarts happened during this pass. After each one I fetched first: origin held every pushed commit, and the one unpushed local merge (`12efbda`) had survived and was pushed.
+- Main's deploy run `41894936895` (push of `098fb97`) ran "Deploy all functions" → `deployed: 50 failed: 0 excluded: 1 (of 51 folders)`, with `mcp` excluded. Read with `get_job_logs`. Unchanged bundles print `No change found in Function: …`, so a function's `updated_at` marks its last **content** change, not its last deploy. That is why only one function's timestamp moved in that run.
+- So live code = main's bundles for all 50 deployable main functions (O, deploy log). `053967d` changes only `_shared/work-sessions.ts`, so its own deploy re-bundles whichever consumers import it. That does not affect this PR.
+- **Which bundles this PR's deploy would actually change** (I, high: the bundler follows imports, and the two new `_shared` files are imported only by these four): `alarm-action` (header comment + type-only cast), `send-push-notification`, `manage-push-subscription`, `execute-tool`. The other 47 should report "No change found".
+
+### R10. Live DB facts, re-read 2026-11-05 (O, read-only `SELECT` via Supabase MCP)
+| fact | value | what it means for this PR |
+|---|---|---|
+| `push_subscriptions` rows with an `fcm_token` | 2, one user | |
+| FCM tokens held by more than one user | **0** | the J14 dedupe deletes nothing at deploy |
+| `fcm_send_failed` last 7 days / of those 404+UNREGISTERED | **0 / 0** | the prune deletes nothing at deploy |
+| last `android_alarm_action` | 2026-10-14 22:15:26 UTC | J13 is still broken live (unchanged) |
+| last `fcm_token_registered` | 2026-10-15 17:01:03 UTC | no 1.0.13 `source: native` registration yet, so **the install-first precondition is NOT met** |
+| `push_subscriptions` policies | `push_subscriptions_owner_select` (SELECT, authenticated), `push_subscriptions_service_role_all` (ALL, service_role) | |
+| migration `20261027210000_push_subscriptions_rls_lockdown` | **APPLIED**, `created_by = github-actions:apply-supabase-migration` | **CORRECTION:** every earlier "the migration is not applied" line in this record and in `RESTORE-step3-j13-j14-security.md` is now stale. The table lockdown (BYPASS2 fix) is live and no longer comes with this PR |
+
+## What will no longer be in place — REFRESHED 2026-11-05 (supersedes the list above and the per-loop lists in the security record)
+
+Once merged and deployed. Main has absorbed the seven verify_jwt pins, and the RLS migration is already applied, so neither is in this list.
+
+1. **Alarm pushes no longer arrive without credentials, but only for the push user's own task and only from a trusted caller.** An FCM push whose `data.taskId` is a uuid carries `actionToken` (7-day, one task, one user) and `actionUrl`. Three conditions apply: the task's `user_id` is the push's `userId`, the caller is the service role or that user's own JWT, and the token goes in the FCM data only (never the web payload, never logged). Otherwise the push is still delivered, without working buttons.
+2. **The phone's Done/Doing/Backlog/Park works again through `alarm-action`.** A token changes only its own user's task, only to those four statuses (tested + mutation-proven). PARK = BACKLOG + `parking-lot` tag + queued alarms cancelled.
+3. **Dead FCM tokens are no longer kept.** Only a row FCM rejects with `404` + `UNREGISTERED` is deleted, only that row, and it is logged `fcm_token_pruned` (tested + mutation-proven). 0 such rows today.
+4. **A registration without the user's own login is refused (401).** This covers `manage-push-subscription` `subscribe_fcm`, `subscribe` and `unsubscribe` (the user's own JWT), and `execute-tool` `register_push_token` (the user's JWT or the service role). **Consequence (the reason for the hard order): TaskOS before 1.0.13 sends the anon key from its native registrar, so its background re-registration (`onNewToken`, launch) gets 401.** A token Firebase rotates while the app is closed then stays unknown, and alarms go to a dead token. The WebView path still registers while the app is open and signed in. Precondition: owner installs **1.0.13**, opens it signed in, and a `fcm_token_registered` row with `source: native` appears. **Not met as of 2026-11-05** (last row 10-15).
+5. **One phone can no longer belong to two accounts, and only a verified owner can trigger that cleanup.** A verified registration deletes other users' rows for that exact token. If a test login ever registers the owner's phone, the owner's row for it goes until the next app open. 0 rows match today.
+6. **Registrations are no longer silent.** Every accepted FCM registration writes one `fcm_token_registered` row.
+7. Rotating `SUPABASE_SERVICE_ROLE_KEY` also invalidates every outstanding alarm token. The phone falls back to its login path.
+8. Deploy: `_shared/` changes → all-mode → 51 deploy calls (every folder except `mcp`), one at a time. By R9, only the four functions above should get a new bundle. `verify_jwt`: 0 mismatches over all 52 (R7).
+
+## Still unproven / open (2026-11-05)
+- **Live confirmation of J13**: only the owner's tap on a post-deploy alarm proves it (see "How the owner confirms it live"). Status: implemented, mechanism verified locally (tests + mutations), NOT confirmed live.
+- **AM2 is a shape test.** With the read scoped by `user_id`, dropping the UPDATE's own `user_id` filter changes no outcome. The test pins defence in depth, not a behaviour.
+- **"Only four bundles change" is inferred** from import graphs, not observed. The merge's deploy log ("No change found" lines) is what confirms it.
+- The Huddle-side items in the security record (body-supplied `caller` on offered journey tools; the rest of `execute-tool` unauthenticated; the widget native refresh) are unchanged and out of this PR's scope.
+- The probe branch `claude_fcm-mutprobe-bearer` still exists for the owner to delete. This pass did not touch it.
