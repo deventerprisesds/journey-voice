@@ -126,6 +126,19 @@ export function getToolDefinitions(): ToolDefinition[] {
     },
     {
       type: "function",
+      name: "rebuild_schedule",
+      description: "Re-run the scheduling job for the user now. scope \"today\" clears and rebuilds today's schedule (the same as the app's Reschedule today button); scope \"week\" runs the full nightly scheduling job for the next 7 days. Use it when the user asks to re-run, redo, or rebuild their schedule or the scheduling job. ONLY when the user explicitly asked in this conversation; set user_explicitly_requested to true only then, otherwise the tool refuses. After it succeeds, read the schedule again before describing it.",
+      parameters: {
+        type: "object",
+        properties: {
+          scope: { type: "string", enum: ["today", "week"], description: "today = rebuild today only (default); week = the full nightly run for the next 7 days" },
+          user_explicitly_requested: { type: "boolean", description: "true ONLY if the user explicitly asked to re-run or rebuild the schedule in this conversation" }
+        },
+        required: ["user_explicitly_requested"]
+      }
+    },
+    {
+      type: "function",
       name: "unschedule_task",
       description: "Remove a task from the calendar schedule.",
       parameters: {
