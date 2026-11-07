@@ -37,6 +37,10 @@ export interface RebuildDeps {
   waitUntil: (p: Promise<unknown>) => void;
   /** Newest nightly_schedule_built row for this user created at/after sinceIso, or null. */
   latestBuildSince: (userId: string, sinceIso: string) => Promise<BuildRow | null>;
+  /** Newest 'schedule_rebuild_requested' row for this user at/after sinceIso, or null. */
+  latestRequestSince: (userId: string, sinceIso: string) => Promise<{ created_at: string; metadata: any } | null>;
+  /** Record that a rebuild was requested (the "one at a time" guard reads it back). */
+  recordRequest: (userId: string, scope: RebuildScope, startedAt: string) => Promise<void>;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -47,6 +51,13 @@ export type ToolResult = Record<string, unknown> & { success: boolean };
 /** How long a status check waits for the run to land before saying "still running". Well under 30s. */
 export const STATUS_WAIT_MS = 20_000;
 export const STATUS_POLL_MS = 4_000;
+/**
+ * One rebuild at a time per user. A run takes 66-196s (activity_log, 2026-11-05..07); on 2026-11-07 one
+ * conversation fired three overlapping rebuilds in 80s and the overlapping week run cleared Nov 8's
+ * placements without finishing (VERIFY-rebuild-schedule-tool-1.md). A start inside this window whose
+ * request has no completion row yet is refused, not stacked.
+ */
+export const IN_FLIGHT_WINDOW_MS = 5 * 60_000;
 
 export function normaliseScope(v: unknown): RebuildScope {
   return v === 'week' ? 'week' : 'today';
@@ -77,6 +88,19 @@ export async function rebuildSchedule(deps: RebuildDeps, userId: string, args: a
   }
   const scope = normaliseScope(args?.scope);
   const now = deps.now ?? Date.now;
+  const inFlight = await deps.latestRequestSince(userId, new Date(now() - IN_FLIGHT_WINDOW_MS).toISOString());
+  if (inFlight) {
+    const doneSince = await deps.latestBuildSince(userId, inFlight.created_at);
+    if (!doneSince) {
+      const prevStarted = inFlight.metadata?.started_at ?? inFlight.created_at;
+      return {
+        success: false,
+        already_running: true,
+        running_since: prevStarted,
+        error: `A schedule rebuild is already running (started ${prevStarted}); a second one would overlap and clobber it, so none was started. Tell the user it is still running; use action "status" with since "${prevStarted}" to check it.`,
+      };
+    }
+  }
   // One second earlier than the kick, so the builder's own completion row is always "since" this.
   const startedAt = new Date(now() - 1000).toISOString();
   const run = (async () => {
@@ -92,6 +116,11 @@ export async function rebuildSchedule(deps: RebuildDeps, userId: string, args: a
       console.error('[rebuild_schedule] builder call failed:', e instanceof Error ? e.message : String(e));
     }
   })();
+  try {
+    await deps.recordRequest(userId, scope, startedAt);
+  } catch (_) {
+    /* the guard is best-effort; never block the user's rebuild on its bookkeeping row */
+  }
   deps.waitUntil(run);
   return {
     success: true,
@@ -153,6 +182,25 @@ export function makeRebuildDeps(supabase: any, supabaseUrl: string, serviceKey: 
       } catch (_) {
         /* local dev: the promise still runs, it just isn't held open */
       }
+    },
+    latestRequestSince: async (userId, sinceIso) => {
+      const { data } = await supabase
+        .from('activity_log')
+        .select('created_at, metadata')
+        .eq('user_id', userId)
+        .eq('activity_type', 'schedule_rebuild_requested')
+        .gte('created_at', sinceIso)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      return (data && data[0]) || null;
+    },
+    recordRequest: async (userId, scope, startedAt) => {
+      await supabase.from('activity_log').insert({
+        user_id: userId,
+        activity_type: 'schedule_rebuild_requested',
+        status: 'started',
+        metadata: { scope, started_at: startedAt, source: 'agent_tool' },
+      });
     },
     latestBuildSince: async (userId, sinceIso) => {
       const { data } = await supabase
