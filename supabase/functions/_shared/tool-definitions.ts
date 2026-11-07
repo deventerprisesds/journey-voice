@@ -127,14 +127,16 @@ export function getToolDefinitions(): ToolDefinition[] {
     {
       type: "function",
       name: "rebuild_schedule",
-      description: "Re-run the scheduling job for the user now. scope \"today\" clears and rebuilds today's schedule (the same as the app's Reschedule today button); scope \"week\" runs the full nightly scheduling job for the next 7 days. Use it when the user asks to re-run, redo, or rebuild their schedule or the scheduling job. ONLY when the user explicitly asked in this conversation; set user_explicitly_requested to true only then, otherwise the tool refuses. After it succeeds, read the schedule again before describing it.",
+      description: "Re-run the scheduling job for the user. action \"start\" (default) kicks it off in the BACKGROUND and returns at once: scope \"today\" clears and rebuilds today's schedule (the same as the app's Reschedule today button); scope \"week\" runs the full nightly scheduling job for the next 7 days. Starting ONLY when the user explicitly asked in this conversation to re-run, redo or rebuild their schedule or the scheduling job; set user_explicitly_requested to true only then, otherwise the tool refuses. A start is NOT a finish: tell the user it has started and that you will report back. action \"status\" (with since = the started_at a start returned) says whether that run has finished and how many tasks it placed; it needs no user_explicitly_requested. After it has finished, read the schedule again before describing it.",
       parameters: {
         type: "object",
         properties: {
-          scope: { type: "string", enum: ["today", "week"], description: "today = rebuild today only (default); week = the full nightly run for the next 7 days" },
-          user_explicitly_requested: { type: "boolean", description: "true ONLY if the user explicitly asked to re-run or rebuild the schedule in this conversation" }
+          action: { type: "string", enum: ["start", "status"], description: "start = kick off a rebuild (default); status = has the rebuild started at `since` finished?" },
+          scope: { type: "string", enum: ["today", "week"], description: "start only. today = rebuild today only (default); week = the full nightly run for the next 7 days" },
+          since: { type: "string", description: "status only. The started_at value the start returned (ISO 8601)" },
+          user_explicitly_requested: { type: "boolean", description: "start only. true ONLY if the user explicitly asked to re-run or rebuild the schedule in this conversation" }
         },
-        required: ["user_explicitly_requested"]
+        required: []
       }
     },
     {
