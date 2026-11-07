@@ -20,10 +20,11 @@ import {
 const ME = 'user-me';
 const T0 = Date.parse('2026-11-07T19:30:00Z');
 
-function harness(opts: { rows?: (BuildRow | null)[]; fetchNeverResolves?: boolean; fetchThrows?: boolean } = {}) {
+function harness(opts: { rows?: (BuildRow | null)[]; fetchNeverResolves?: boolean; fetchThrows?: boolean; inFlight?: { created_at: string; metadata: any } | null } = {}) {
   const calls: Array<{ url: string; body: any; auth: string }> = [];
   const held: Promise<unknown>[] = [];
   const reads: Array<{ userId: string; since: string }> = [];
+  const recorded: Array<{ userId: string; scope: string; startedAt: string }> = [];
   let clock = T0;
   const rows = [...(opts.rows ?? [])];
   const fetch: FetchLike = (url, init) => {
@@ -41,10 +42,12 @@ function harness(opts: { rows?: (BuildRow | null)[]; fetchNeverResolves?: boolea
       reads.push({ userId, since });
       return rows.length ? (rows.shift() ?? null) : null;
     },
+    latestRequestSince: async () => opts.inFlight ?? null,
+    recordRequest: async (userId, scope, startedAt) => { recorded.push({ userId, scope, startedAt }); },
     now: () => clock,
     sleep: async (ms) => { clock += ms; },
   };
-  return { deps, calls, held, reads };
+  return { deps, calls, held, reads, recorded };
 }
 
 test('R1 start refuses without user_explicitly_requested, and never calls the builder', async () => {
@@ -97,6 +100,31 @@ test('R5 a builder transport failure inside the background run never throws out 
   const r = await rebuildSchedule(h.deps, ME, { user_explicitly_requested: true });
   assert.equal(r.success, true);
   await Promise.all(h.held); // must resolve, not reject
+});
+
+test('G1 one at a time: a start while a requested run has no completion row is refused, no builder call', async () => {
+  const h = harness({ inFlight: { created_at: '2026-11-07T19:28:00Z', metadata: { started_at: '2026-11-07T19:27:59.000Z' } }, rows: [null] });
+  const r = await rebuildSchedule(h.deps, ME, { user_explicitly_requested: true, scope: 'week' });
+  assert.equal(r.success, false);
+  assert.equal(r.already_running, true);
+  assert.equal(r.started, undefined, 'a refusal must not look like a start (Huddle would arm a check)');
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.held.length, 0);
+  assert.match(String(r.error), /already running/);
+});
+
+test('G2 a previous request that has completed does not block a new start', async () => {
+  const h = harness({ inFlight: { created_at: '2026-11-07T19:28:00Z', metadata: {} }, rows: [{ status: 'completed', created_at: '2026-11-07T19:29:30Z', metadata: {} }] });
+  const r = await rebuildSchedule(h.deps, ME, { user_explicitly_requested: true });
+  assert.equal(r.success, true);
+  assert.equal(r.started, true);
+  assert.equal(h.calls.length, 1);
+});
+
+test('G3 a start records the request (the guard reads it back) for the caller with its scope', async () => {
+  const h = harness();
+  const r = await rebuildSchedule(h.deps, ME, { user_explicitly_requested: true, scope: 'week' });
+  assert.deepEqual(h.recorded, [{ userId: ME, scope: 'week', startedAt: String(r.started_at) }]);
 });
 
 test('S1 status: finished run -> placed count, scope from the row, no consent needed', async () => {
@@ -157,4 +185,6 @@ test('W2 tool definition: start/status actions, today/week scope, consent field 
   assert.match(block, /enum: \["today", "week"\]/);
   assert.match(block, /user_explicitly_requested/);
   assert.match(block, /A start is NOT a finish/);
+  assert.match(block, /REMOVES the app-created calendar events/);
+  assert.match(block, /Only one rebuild runs at a time/);
 });
