@@ -9,7 +9,7 @@ import { resolveConfig, validateTaskWindow, activeCaveats } from "../_shared/sch
 import { mintCaller } from "../_shared/push-auth.ts";
 import { runDedup, finalizeDedup, undoDedupSkips, type DedupLogEntry } from "../_shared/task-dedup.ts";
 import { updateCalendarEvent, deleteCalendarEvent, makeSupabaseCalendarEditDeps } from "../_shared/calendar-edit.ts";
-import { rebuildSchedule } from "../_shared/rebuild-schedule.ts";
+import { rebuildSchedule, makeRebuildDeps } from "../_shared/rebuild-schedule.ts";
 
 // ── Rollback Flag for shared topic ranking ──────────────────────────
 const USE_SHARED_TOPICS = true;
@@ -374,7 +374,7 @@ async function executeToolCall(
         return await scheduleTask(supabase, userId, args);
 
       case 'rebuild_schedule':
-        return calendarEditResponse(await rebuildSchedule({ supabaseUrl: SUPABASE_URL, serviceKey: SUPABASE_SERVICE_KEY, fetch }, userId, args ?? {}));
+        return calendarEditResponse(await rebuildSchedule(makeRebuildDeps(supabase, SUPABASE_URL, SUPABASE_SERVICE_KEY, fetch), userId, args ?? {}));
 
       case 'unschedule_task':
         return await unscheduleTask(supabase, userId, args);
