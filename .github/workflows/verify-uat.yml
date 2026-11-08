@@ -14,6 +14,11 @@
 name: Verify UAT (live journey web app, real browser)
 
 on:
+  # workflow_dispatch 404s until this file is on the default branch (measured 2026-11-08), so this
+  # branch-scoped push trigger is how the first runs happen. REMOVE IT BEFORE MERGING.
+  push:
+    branches: [claude_journey-verify-uat]
+    paths: ['.github/workflows/verify-uat.yml', 'scripts/uat/**']
   workflow_dispatch:
     inputs:
       checks_file:
@@ -90,11 +95,11 @@ jobs:
 
       - name: Run UAT
         env:
-          APP_URL: ${{ inputs.app_url }}
-          CHECKS_FILE: ${{ github.workspace }}/${{ inputs.checks_file }}
+          APP_URL: ${{ inputs.app_url || 'https://journey-voice.lovable.app' }}
+          CHECKS_FILE: ${{ github.workspace }}/${{ inputs.checks_file || 'scripts/uat/settings-coursework-checks.mjs' }}
           SHOT_DIR: uat-shots
-          UAT_VIEWPORT_W: ${{ inputs.viewport_w }}
-          UAT_VIEWPORT_H: ${{ inputs.viewport_h }}
+          UAT_VIEWPORT_W: ${{ inputs.viewport_w || '1440' }}
+          UAT_VIEWPORT_H: ${{ inputs.viewport_h || '900' }}
         run: node scripts/uat/run-uat.mjs
 
       - name: Upload screenshots + results

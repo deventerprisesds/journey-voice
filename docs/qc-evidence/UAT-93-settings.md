@@ -33,3 +33,6 @@ Written as the work happened. Read-only check: nothing is saved, no setting is c
   action link redirects to the project's configured Site URL / allow-list, which may not be the
   lovable.app origin; the token-hash exchange does not depend on redirect config. No email is sent
   by `generate_link`. No app code changed.
+- **Step 3 — dispatch.** `workflow_dispatch` on the branch returned **404** (a dispatchable workflow
+  has to exist on the default branch). Added a `push:` trigger scoped to `claude_journey-verify-uat`
+  only, with `||` input defaults; it must be removed before merge.
