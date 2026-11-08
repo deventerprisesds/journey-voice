@@ -38,8 +38,10 @@ async function bundleHasStrings({ page, check }) {
     if (!r.ok) continue;
     const js = await r.text();
     if (js.includes("Only one paper a night")) { found = p; break; }
-    for (const m of js.matchAll(/assets\/[A-Za-z0-9_.-]+\.js/g)) {
-      const q = "/" + m[0];
+    // Vite chunks reference each other as "./Name-hash.js" (relative to /assets/) as well as
+    // "assets/Name-hash.js" -- run 42487226041 scanned only 1 file because it matched the latter only.
+    for (const m of js.matchAll(/(?:assets\/|["'`]\.\/)([A-Za-z0-9_.-]+\.js)/g)) {
+      const q = "/assets/" + m[1];
       if (!seen.has(q)) queue.push(q);
     }
   }

@@ -36,3 +36,27 @@ Written as the work happened. Read-only check: nothing is saved, no setting is c
 - **Step 3 — dispatch.** `workflow_dispatch` on the branch returned **404** (a dispatchable workflow
   has to exist on the default branch). Added a `push:` trigger scoped to `claude_journey-verify-uat`
   only, with `||` input defaults; it must be removed before merge.
+
+## RESULT — run 42487226041 (2026-11-08 13:55Z, branch-push trigger, commit 7a4c46f)
+
+**#93's UI is NOT live.** Signed in as the owner, the live Settings → Scheduling → "Coursework Work
+Sessions" card renders the PRE-#93 version: the "Spread assignments into work sessions" checkbox and
+four number fields (days before due 7, session length 90, default effort 180, stop-hours 1). The
+"Only one paper a night" checkbox and the "Words that mark a lighter, finite assignment" field are
+absent. `origin/main` has them (merge 053967d), so the gap is the Lovable publish, not the code.
+
+| Check | Result | Observed |
+|---|---|---|
+| C0 bundle contains text | FAIL (probe weak) | scanned only 1 JS file; crawler missed Vite's `./chunk.js` imports — fixed in the next commit. Not relied on. |
+| C1 signed in as owner | PASS | session user = owner; landed on `/settings` |
+| C2 card present | PASS | 1 match |
+| C3 one-paper checkbox | **FAIL** | `#assignment-sessions-one-paper` count 0 |
+| C4a word-list field | **FAIL** | label count 0 |
+| C4b default words | **FAIL** | field absent |
+| console errors / 4xx | FAIL (noise, unrelated) | 406 on `calendar_connections?id=eq.…` (`.single()` on a missing row), aborted `error_log`/`activity_log` inserts at page teardown |
+
+Screenshots: `uat-shots` branch @ 793815b (`93-coursework-card.png`, `01-scheduling-tab.png`).
+Nothing was saved; no field was focused or toggled.
+
+**To close:** publish the current `main` from Lovable, then re-run this workflow (unchanged) — C3/C4
+are the checks that flip.
