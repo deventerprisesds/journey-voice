@@ -3,9 +3,15 @@
 # WHY:           The scorecard must call the deployed parser, and the coding session's network cannot reach
 #                the project host (proxy CONNECT 403, measured 2026-11-04). A GitHub runner can.
 # SUPERSEDES:    nothing.  SUPERSEDED-BY: nothing -- current.
-# EVIDENCE:      docs/qc-evidence/AC-job-category.md AC-D9/AC-D10.
+# EVIDENCE:      docs/qc-evidence/AC-job-category.md AC-D9/AC-D10; docs/qc-evidence/FIX-parse-context-categories.md.
 #
 # Writes nothing to the board: the script uses the parser's parse-only path (userId, no boardId).
+#
+# target: live   (default) -> the DEPLOYED ai-task-parser, i.e. what main runs today.
+# target: branch -> THIS ref's supabase/functions/ai-task-parser/index.ts, served by deno on the runner with
+#                  journey's own secrets (OpenAI key + service key for the employer/name-hint read), so a parser
+#                  change is measured BEFORE it is merged. Same model, same prompt code, same owner briefing;
+#                  nothing is deployed.
 name: Eval JOB category scorecard
 
 on:
@@ -19,6 +25,10 @@ on:
         description: 'Calls per title (pass bar: owner-ruled rows right every time, others 2 of 3)'
         required: false
         default: '3'
+      target:
+        description: 'live = deployed parser; branch = this ref''s parser served on the runner (nothing deployed)'
+        required: false
+        default: 'live'
 
 permissions:
   contents: read
@@ -31,12 +41,34 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: denoland/setup-deno@v2
+        if: ${{ inputs.target == 'branch' }}
+        with:
+          deno-version: v2.x
+      - name: Serve this ref's ai-task-parser on the runner
+        if: ${{ inputs.target == 'branch' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.CF_OPENAI_API_KEY }}
+          SUPABASE_URL: https://wwxgajrtmslzklnyplah.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
+        run: |
+          test -n "$OPENAI_API_KEY" || { echo 'CF_OPENAI_API_KEY is empty for this repo'; exit 1; }
+          nohup deno run --no-lock --allow-net --allow-env --allow-read supabase/functions/ai-task-parser/index.ts > parser.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -s -o /dev/null -X OPTIONS http://localhost:8000; then echo "parser up after ${i}s"; exit 0; fi
+            sleep 1
+          done
+          cat parser.log; exit 1
       - name: Run the scorecard
         env:
           LABEL: ${{ inputs.label }}
           RUNS: ${{ inputs.runs }}
+          PARSER_URL: ${{ inputs.target == 'branch' && 'http://localhost:8000' || '' }}
         run: |
           node scripts/eval-job-category.mjs "$LABEL" "$RUNS"
           echo '----- EVAL REPORT -----'
           cat "docs/qc-evidence/EVAL-job-category-$LABEL.md"
           echo '----- END EVAL REPORT -----'
+      - name: Parser log (branch target)
+        if: ${{ always() && inputs.target == 'branch' }}
+        run: tail -n 80 parser.log || true

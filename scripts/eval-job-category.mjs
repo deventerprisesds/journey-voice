@@ -5,7 +5,17 @@
 //                automatically push it to job even if trinnex isnt explicitly stated". Only running the real
 //                model can show that; a prompt reading cannot.
 // SUPERSEDES:    nothing.  SUPERSEDED-BY: nothing -- current.
-// EVIDENCE:      docs/qc-evidence/AC-job-category.md AC-D9/AC-D10 and section 4 (the eval set).
+// EVIDENCE:      docs/qc-evidence/AC-job-category.md AC-D9/AC-D10 and section 4 (the eval set);
+//                docs/qc-evidence/FIX-parse-context-categories.md (the BATCH rows B-*).
+//
+// BATCH ROWS (added 2026-11-08): the 11-07 incident sent 23 work lines in ONE multiple-mode call and five came
+// back VENTURES although the single-title rows above pass. The batch rows replay those 23 lines verbatim
+// (fixture supabase/functions/_shared/fixtures/iris-bulk-2026-11-07.json), once bare and once with the owner's
+// own preface as `context`. Owner ruling 2026-11-08: all 23 are work (Trinnex) -> every line expects JOB.
+//
+// PARSER_URL (env) points the scorecard at a parser other than the live one -- the workflow's `target: branch`
+// runs THIS branch's ai-task-parser/index.ts under deno on the runner and sets PARSER_URL to it, so a prompt change
+// can be measured before it is merged. Unset = the live deployed parser.
 //
 // WRITES NOTHING TO THE BOARD: it calls the parser with a userId but NO boardId, the parse-only path (the
 // parser never inserts; task creation lives in execute-tool). The userId is passed so the parser loads the
@@ -14,9 +24,10 @@
 // Usage: node scripts/eval-job-category.mjs <label> [runs=3]
 // Pass bar (AC-D9): rows marked R (owner rulings) must be right on every run; other rows on at least 2 of 3.
 
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
-const URL = 'https://wwxgajrtmslzklnyplah.supabase.co/functions/v1/ai-task-parser';
+const PARSER = process.env.PARSER_URL || 'https://wwxgajrtmslzklnyplah.supabase.co/functions/v1/ai-task-parser';
+const BATCH = JSON.parse(readFileSync(new URL('../supabase/functions/_shared/fixtures/iris-bulk-2026-11-07.json', import.meta.url), 'utf8'));
 // Public anon key (ships in the client app; see CLAUDE.md "The anon key and project URL are PUBLIC").
 const ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind3eGdhanJ0bXNsemtsbnlwbGFoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg0MDI3MzIsImV4cCI6MjA3Mzk3ODczMn0._M_B3093_wjfFe4vwXmKXVCcw-QG5UhRAT4-H-aGoHE';
 const OWNER = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1';
@@ -54,8 +65,37 @@ const ROWS = [
   ['E-27', 'Work on my SDLC app', 'JOB', true],
 ];
 
+async function parseBatch(text, context) {
+  const res = await fetch(PARSER, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ANON}`, apikey: ANON },
+    body: JSON.stringify({ text, mode: 'multiple', timezone: 'America/New_York', userId: OWNER, ...(context ? { context } : {}) }),
+  });
+  const body = await res.text();
+  if (!res.ok) return { error: `HTTP ${res.status}`, tasks: [] };
+  try {
+    return { tasks: JSON.parse(body).tasks ?? [] };
+  } catch {
+    return { error: '(bad json)', tasks: [] };
+  }
+}
+
+// The parser rewrites titles, so a returned task is matched to the input line it shares the most words with.
+const words = (t) => new Set(String(t).toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ').filter((w) => w.length > 2));
+function bestLine(title, lines) {
+  const a = words(title);
+  let best = -1, score = 0;
+  lines.forEach((l, i) => {
+    const b = words(l);
+    const inter = [...a].filter((w) => b.has(w)).length;
+    const s = inter / Math.max(1, new Set([...a, ...b]).size);
+    if (s > score) { score = s; best = i; }
+  });
+  return best;
+}
+
 async function parse(text) {
-  const res = await fetch(URL, {
+  const res = await fetch(PARSER, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ANON}`, apikey: ANON },
     body: JSON.stringify({ text, mode: 'single', timezone: 'America/New_York', userId: OWNER }),
@@ -84,21 +124,63 @@ for (const [id, title, want, ruled] of ROWS) {
   console.log(`${ok ? 'PASS' : 'FAIL'} ${id} ${title} -> ${got.join(',')} (want ${want})`);
 }
 
+// ---- BATCH rows: the 23 lines in ONE call, bare (B-bare) and with the preface as context (B-ctx) ----
+const batchLines = [];
+let batchPassed = 0;
+const variants = [['B-bare', null], ['B-ctx', BATCH.preface]];
+for (const [vid, context] of variants) {
+  const perLine = BATCH.lines.map(() => []);
+  const notes = [];
+  for (let r = 0; r < runs; r++) {
+    const { tasks, error } = await parseBatch(BATCH.lines.join('\n'), context);
+    if (error) notes.push(`run ${r + 1}: ${error}`);
+    if (tasks.length !== BATCH.lines.length) notes.push(`run ${r + 1}: ${tasks.length} tasks returned`);
+    const seen = BATCH.lines.map(() => null);
+    for (const t of tasks) {
+      const i = bestLine(t.title, BATCH.lines);
+      if (i >= 0 && seen[i] === null) seen[i] = t.category ?? '(none)';
+    }
+    seen.forEach((c, i) => perLine[i].push(c ?? '(missing)'));
+  }
+  let vPass = 0;
+  BATCH.lines.forEach((line, i) => {
+    const got = perLine[i];
+    const right = got.filter((g) => g === 'JOB').length;
+    const ok = right === runs; // owner ruling 2026-11-08: all 23 are work, so every run must say JOB
+    if (ok) vPass++;
+    batchLines.push(`| ${vid}-${i + 1} | ${line} | JOB (R) | ${got.join(', ')} | ${right}/${runs} | ${ok ? 'PASS' : 'FAIL'} |`);
+    console.log(`${ok ? 'PASS' : 'FAIL'} ${vid}-${i + 1} ${line} -> ${got.join(',')}`);
+  });
+  if (notes.length) batchLines.push(`| ${vid} notes | ${notes.join('; ')} | | | | |`);
+  batchLines.push(`| **${vid} total** | ${context ? `context: "${context}"` : 'no context'} | | | **${vPass}/${BATCH.lines.length}** | |`);
+  if (vPass === BATCH.lines.length) batchPassed++;
+  console.log(`${vid}: ${vPass}/${BATCH.lines.length} lines JOB on every run`);
+}
+
 const out = `<!--
 WHAT:          JOB-category scorecard result, run "${label}".
 WHY:           proves (or disproves) that the live category AI files employer work as JOB without the name.
 SUPERSEDES:    nothing.  SUPERSEDED-BY: nothing -- current.
-EVIDENCE:      produced by scripts/eval-job-category.mjs against ${URL} at ${new Date().toISOString()}.
+EVIDENCE:      produced by scripts/eval-job-category.mjs against ${PARSER} at ${new Date().toISOString()}.
 -->
 
 # JOB category scorecard: ${label}
 
-**${passed} of ${ROWS.length} rows pass** (${runs} runs each; (R) rows must be right every run, others at least 2 of ${runs}).
+Parser: ${PARSER}
+
+**${passed} of ${ROWS.length} single-title rows pass** (${runs} runs each; (R) rows must be right every run, others at least 2 of ${runs}).
+**${batchPassed} of ${variants.length} batch variants pass** (all 23 lines JOB on every run).
 
 | # | Title | Expected | Got (per run) | Right | Verdict |
 |---|---|---|---|---|---|
 ${lines.join('\n')}
+
+## Batch rows (the 11-07 23-line call, one multiple-mode call per run)
+
+| # | Line | Expected | Got (per run) | Right | Verdict |
+|---|---|---|---|---|---|
+${batchLines.join('\n')}
 `;
 const path = `docs/qc-evidence/EVAL-job-category-${label}.md`;
 writeFileSync(path, out);
-console.log(`\n${passed}/${ROWS.length} pass -> ${path}`);
+console.log(`\n${passed}/${ROWS.length} single-title pass, ${batchPassed}/${variants.length} batch variants pass -> ${path}`);
