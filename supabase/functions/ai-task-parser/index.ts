@@ -2,12 +2,42 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { CATEGORY_KEYS, normalizeCategory } from "../_shared/categories.ts";
-import { buildCategoryGuide, buildRequestContextBlock, categoryHintsFromKeywords } from "../_shared/category-guide.ts";
+import { buildCategoryClassifierPrompt, buildCategoryGuide, buildRequestContextBlock, categoryHintsFromKeywords, parseCategoryReply } from "../_shared/category-guide.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
+
+// One title's category, chosen on its own (see buildCategoryClassifierPrompt). Null on any failure or timeout:
+// the caller then keeps the batch parse's category, so this pass can only ever replace a category, never lose a task.
+async function classifyCategoryOne(apiKey: string, systemPrompt: string, title: string, description: string | null): Promise<string | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        temperature: 0.1,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: description ? `${title}\n(${description})` : title },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return parseCategoryReply(data?.choices?.[0]?.message?.content);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // Helper function to extract scheduling hints from task text and user config
 function extractSchedulingHints(
@@ -402,6 +432,20 @@ Examples (category varies; status is a workflow state in every one):
         }
         return task;
       });
+
+      // PER-TITLE CATEGORY PASS: with several tasks, choose each one's category in its own small call (in parallel),
+      // because one completion over a long list drifts as a whole (11-07: five work lines filed VENTURES). A failed
+      // call keeps the batch's category.
+      if (tasks.length > 1) {
+        const classifierPrompt = buildCategoryClassifierPrompt({ employer, hints: categoryHints, context });
+        const picks = await Promise.all(tasks.map((t: any) => classifyCategoryOne(OPENAI_API_KEY, classifierPrompt, String(t.title ?? ''), t.description ?? null)));
+        picks.forEach((pick, i) => {
+          if (pick && pick !== tasks[i].category) {
+            console.log(`🏷️ Per-title category: "${tasks[i].title}" ${tasks[i].category} -> ${pick}`);
+            tasks[i].category = pick;
+          }
+        });
+      }
       
       // BULK MODE THRESHOLD
       const BULK_THRESHOLD = 3;

@@ -111,3 +111,33 @@ export function buildRequestContextBlock(context: unknown): string {
     'Wording that only means DOING something ("things I need to work on", "priorities for today") is NOT a work framing (owner ruling 2026-11-08): decide those lines one by one as usual.',
   ].join('\n');
 }
+
+/**
+ * System prompt for choosing the category of ONE title, used after a multi-task parse. Added 2026-11-08: one
+ * gpt-4o-mini completion over 23 titles let whole runs drift (one run filed most lines VENTURES, the next
+ * EDUCATION) while the same titles parsed one at a time were right (docs/qc-evidence/FIX-parse-context-categories.md
+ * section 2). Same briefing (buildCategoryGuide) and the same request context the batch prompt sees.
+ */
+export function buildCategoryClassifierPrompt(opts: {
+  employer?: string | null;
+  hints?: Array<{ name: string; category: TaskCategory }>;
+  context?: unknown;
+}): string {
+  const ctx = buildRequestContextBlock(opts.context);
+  return [
+    `You choose the CATEGORY of ONE task on the owner's task board. Reply with JSON only: {"category": "<one of ${CATEGORY_KEYS.join('|')}>"}.`,
+    '',
+    buildCategoryGuide({ employer: opts.employer, hints: opts.hints }),
+    ...(ctx ? ['', ctx] : []),
+  ].join('\n');
+}
+
+/** The category in a classifier reply, or null for anything that is not exactly one real category. */
+export function parseCategoryReply(content: unknown): TaskCategory | null {
+  if (typeof content !== 'string') return null;
+  try {
+    return toCategoryKey(JSON.parse(content)?.category);
+  } catch {
+    return null;
+  }
+}
