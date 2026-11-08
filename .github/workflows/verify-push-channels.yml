@@ -37,23 +37,20 @@ jobs:
           echo "whoami → $RESP"
           echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); o=json.loads(d.get('output','{}')) if isinstance(d.get('output'),str) else {}; assert d.get('ok') and o.get('user_id'), 'caller did not resolve to a journey user'; print('Resolved user_id=%s email=%s' % (o.get('user_id'), o.get('email')))"
 
-      - name: Fire all three channels
+      - name: Fire ONE test alert to the Huddle app only (owner-requested 2026-11-08)
+        # BRANCH-ONLY copy (claude_huddle-test-push), never merged: same route Iris's replies use
+        # (huddle-proxy /tool -> send_push, channel messages, app "huddle" -> only fcm:app:huddle:% tokens),
+        # unique tag so it cannot overwrite another notification. No alarm, no TaskOS buzz.
         run: |
           set -euo pipefail
-          fire() { # $1=channel  $2=title  $3=body  $4=deepLink
-            echo "--- send_push channel=$1 ---"
-            RESP=$(curl -sS -X POST "${PROXY}/tool" \
-              -H "Authorization: Bearer ${TOKEN}" -H "x-huddle-proxy: 1" -H "Content-Type: application/json" \
-              -d "$(python3 -c "import json,sys; print(json.dumps({'toolName':'send_push','args':{'title':sys.argv[2],'body':sys.argv[3],'channel':sys.argv[1],'data':{'deepLink':sys.argv[4],'tag':'verify-'+sys.argv[1]}},'caller':{'entra_email':'${CALLER}'}}))" "$1" "$2" "$3" "$4")")
-            echo "response: $RESP"
-            echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print('OK:', d.get('message') or d.get('output')) if d.get('ok') else (print('FAIL:', d.get('error') or d.get('output')), sys.exit(1))"
-          }
-          fire "messages"        "Huddle · channel test 1/3" "Messages channel — heads-up chat notification. (test)"        "/"
-          sleep 3
-          fire "task-reminders"  "Huddle · channel test 2/3" "Task-reminders channel — heads-up reminder. (test)"          "/tasks"
-          sleep 3
-          fire "calendar_events" "Huddle · channel test 3/3" "Calendar-events channel — full-screen alarm; tap Dismiss. (test)" "/calendar"
-          echo "All three send_push calls returned ok."
+          NOW_ET=$(TZ=America/New_York date +'%-I:%M %p')
+          TAG="claude-test-$(date -u +%Y%m%d%H%M%S)"
+          BODY=$(python3 -c "import json,sys; print(json.dumps({'toolName':'send_push','args':{'title':'Test alert from Claude','body':'If you can see this, Huddle alerts reach your phone. Sent '+sys.argv[1]+' ET.','channel':'messages','app':'huddle','data':{'deepLink':'/?huddle=dm-iris-chase','source':'huddle-message','huddleId':'dm-iris-chase','notificationId':sys.argv[2],'tag':sys.argv[2]}},'caller':{'entra_email':'${CALLER}'}}))" "$NOW_ET" "$TAG")
+          RESP=$(curl -sS -X POST "${PROXY}/tool" \
+            -H "Authorization: Bearer ${TOKEN}" -H "x-huddle-proxy: 1" -H "Content-Type: application/json" -d "$BODY")
+          echo "sent at ${NOW_ET} ET tag=${TAG}"
+          echo "response: $RESP"
+          echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print('OK:', d.get('message') or d.get('output')) if d.get('ok') else (print('FAIL:', d.get('error') or d.get('output')), sys.exit(1))"
 
       - name: Confirm delivery from the server (activity_log)
         if: always()
@@ -83,8 +80,8 @@ jobs:
               ch=m.get('channel','?'); print(f\"  [{r['created_at'][:19]}] {r['activity_type']} status={r.get('status')} channel={ch} title={str(m.get('title','-'))[:40]}\")
               if r['activity_type']=='fcm_send_success': seen.add(ch)
           print()
-          want={'messages','task-reminders','calendar_events'}
+          want={'messages'}
           got=want & seen
           print('Channels with fcm_send_success:', sorted(got) or 'none')
-          print('RESULT:', 'ALL-THREE-DELIVERED' if want<=seen else f'MISSING {sorted(want-seen)}')
+          print('RESULT:', 'MESSAGES-DELIVERED-TO-FCM' if want<=seen else f'MISSING {sorted(want-seen)}')
           "
