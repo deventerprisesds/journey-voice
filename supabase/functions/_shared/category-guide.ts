@@ -32,6 +32,21 @@ export function categoryHintsFromKeywords(
   return out;
 }
 
+/**
+ * The names a task might use for the employer. Profile > Company is free text: "Trinnex (a CDM Smith company)"
+ * (owner, 2026-11-08) gives ["Trinnex", "CDM Smith"], because a task says "Trinnex" or "CDM Smith", never the
+ * whole parenthetical. A plain value gives just itself.
+ */
+export function employerNames(employer: string): string[] {
+  const m = employer.match(/^(.*?)\s*\((.*)\)\s*$/);
+  if (!m) return [employer];
+  const parent = m[2].trim()
+    .replace(/^(?:a|an|the|part of|a part of|subsidiary of|a subsidiary of|owned by)\s+/i, '')
+    .replace(/\s+(?:company|subsidiary|group)$/i, '')
+    .trim();
+  return [m[1].trim(), parent].filter((n, i, a) => n.length >= 2 && a.indexOf(n) === i);
+}
+
 /** The briefing text. `employer` may be null/empty: the JOB rules still apply, just without a name. */
 export function buildCategoryGuide(opts: {
   employer?: string | null;
@@ -45,9 +60,12 @@ export function buildCategoryGuide(opts: {
   for (const k of CATEGORY_KEYS) lines.push(`- ${k}: ${CATEGORY_MEANINGS[k]}.`);
 
   lines.push('');
-  lines.push(employer
-    ? `THE OWNER'S EMPLOYER is ${employer}. Work for ${employer} is JOB whether or not "${employer}" appears in the task.`
-    : `The owner's employer is not named. Work for an employer is still JOB.`);
+  if (employer) {
+    const names = employerNames(employer);
+    lines.push(`THE OWNER'S EMPLOYER is ${employer}. Work for ${names.join(' or ')} is JOB whether or not ${names.map((n) => `"${n}"`).join(' or ')} appears in the task.`);
+  } else {
+    lines.push(`The owner's employer is not named. Work for an employer is still JOB.`);
+  }
 
   if (hints.length) {
     const byCat = new Map<TaskCategory, string[]>();
@@ -88,7 +106,8 @@ export function buildRequestContextBlock(context: unknown): string {
   return [
     "THE USER'S OWN MESSAGE THAT REQUESTED THESE TASKS (context only -- never create a task from it):",
     `"""${text}"""`,
-    'Use it to decide category. A framing it states (e.g. "for work", "my work priorities today", "priorities I need to work on today") applies to EVERY task in this input unless a line clearly says otherwise (a personal errand, family, health, a class).',
-    'A work framing means JOB for every such line: it outranks the name hints and the default rules above, because the user has said what these tasks are for.',
+    'Use it to decide category. A framing it states explicitly (e.g. "for work", "my work priorities today", "these are all job tasks") applies to EVERY task in this input unless a line clearly says otherwise (a personal errand, family, health, a class).',
+    'An explicit work framing means JOB for every such line: it outranks the name hints and the default rules above, because the user has said what these tasks are for.',
+    'Wording that only means DOING something ("things I need to work on", "priorities for today") is NOT a work framing (owner ruling 2026-11-08): decide those lines one by one as usual.',
   ].join('\n');
 }

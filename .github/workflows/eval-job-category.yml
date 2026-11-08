@@ -25,6 +25,10 @@ on:
         description: 'Calls per title (pass bar: owner-ruled rows right every time, others 2 of 3)'
         required: false
         default: '3'
+      job:
+        description: 'scorecard = category eval; dedup-replay = replay the 11-07 duplicates through the live dedup setting (read-only)'
+        required: false
+        default: 'scorecard'
       target:
         description: 'live = deployed parser; branch = this ref''s parser served on the runner (nothing deployed)'
         required: false
@@ -41,12 +45,23 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Dedup replay of 11-07 (read-only)
+        if: ${{ inputs.job == 'dedup-replay' }}
+        env:
+          LABEL: ${{ inputs.label }}
+          OPENAI_API_KEY: ${{ secrets.CF_OPENAI_API_KEY }}
+          SB_SERVICE_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
+        run: |
+          node --experimental-strip-types scripts/replay-task-dedup.mjs "$LABEL"
+          echo '----- REPLAY REPORT -----'
+          cat "docs/qc-evidence/REPLAY-task-dedup-$LABEL.md"
+          echo '----- END REPLAY REPORT -----'
       - uses: denoland/setup-deno@v2
-        if: ${{ inputs.target == 'branch' }}
+        if: ${{ inputs.job != 'dedup-replay' && inputs.target == 'branch' }}
         with:
           deno-version: v2.x
       - name: Serve this ref's ai-task-parser on the runner
-        if: ${{ inputs.target == 'branch' }}
+        if: ${{ inputs.job != 'dedup-replay' && inputs.target == 'branch' }}
         env:
           OPENAI_API_KEY: ${{ secrets.CF_OPENAI_API_KEY }}
           SUPABASE_URL: https://wwxgajrtmslzklnyplah.supabase.co
@@ -60,6 +75,7 @@ jobs:
           done
           cat parser.log; exit 1
       - name: Run the scorecard
+        if: ${{ inputs.job != 'dedup-replay' }}
         env:
           LABEL: ${{ inputs.label }}
           RUNS: ${{ inputs.runs }}
@@ -70,5 +86,5 @@ jobs:
           cat "docs/qc-evidence/EVAL-job-category-$LABEL.md"
           echo '----- END EVAL REPORT -----'
       - name: Parser log (branch target)
-        if: ${{ always() && inputs.target == 'branch' }}
+        if: ${{ always() && inputs.job != 'dedup-replay' && inputs.target == 'branch' }}
         run: tail -n 80 parser.log || true
