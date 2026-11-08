@@ -118,10 +118,10 @@ serve(async (req) => {
 
         if (connection.provider === 'outlook' || connection.provider === 'office365') {
           result = await syncOutlookDelta(supabaseClient, connection, tokens);
-          // Work-calendar feed (OneDrive snapshot) rides the SAME EDS sign-in. Off unless the
+          // Work-calendar feed (OneDrive snapshot, read with the app key). Off unless the
           // TASKOS_ONEDRIVE_FEED secret names this account; never fails the Outlook sync.
           try {
-            const feed = await syncFeedCalendar(supabaseClient, connection, tokens.refresh_token);
+            const feed = await syncFeedCalendar(supabaseClient, connection);
             if (feed.status !== 'off' && feed.status !== 'not_this_account') {
               (result as DeltaSyncResult & { feed?: unknown }).feed = feed;
               console.log('[calendar-delta-sync] work-calendar feed', feed);
