@@ -18,6 +18,8 @@
 // Everything that talks to the network or the DB is injected (CalendarEditDeps), so the logic is
 // unit-tested with no real calendar call. Nothing here runs at import time.
 
+import { isFeedEventId } from "./onedrive-feed.ts";
+
 export type CalendarProvider = 'outlook' | 'google';
 
 export interface CalendarEventRow {
@@ -93,6 +95,18 @@ export function summarize(r: CalendarEventRow) {
     title: r.title,
     start_time: r.start_time,
     end_time: r.end_time,
+  };
+}
+
+/** Work-calendar feed rows (OneDrive snapshot, _shared/onedrive-feed.ts) are read-only copies:
+ *  their id is not a Graph id, so PATCH/DELETE would fail at Microsoft with a confusing error. */
+export function feedReadOnly(eventId: string): ToolResult | null {
+  if (!isFeedEventId(eventId)) return null;
+  return {
+    success: false,
+    read_only: true,
+    event_id: eventId,
+    error: 'That meeting is a read-only copy from your work calendar. TaskOS cannot change it; change it in your work Outlook and the copy updates on the next sync.',
   };
 }
 
@@ -241,6 +255,8 @@ export async function updateCalendarEvent(deps: CalendarEditDeps, userId: string
   const provider = r.kind === 'one' ? r.row.provider : r.provider;
   const eventId = r.kind === 'one' ? r.row.external_event_id : r.eventId;
   const original = r.kind === 'one' ? r.row : null;
+  const ro = feedReadOnly(eventId);
+  if (ro) return ro;
 
   const patch = buildPatch(provider, args, original);
   if ('error' in patch) return { success: false, error: patch.error };
@@ -280,6 +296,8 @@ export async function deleteCalendarEvent(deps: CalendarEditDeps, userId: string
   if (r.kind === 'result') return r.result;
   const provider = r.kind === 'one' ? r.row.provider : r.provider;
   const eventId = r.kind === 'one' ? r.row.external_event_id : r.eventId;
+  const ro = feedReadOnly(eventId);
+  if (ro) return ro;
 
   const tok = await deps.getAccessToken(userId, provider);
   if ('error' in tok) return { success: false, error: tok.error };
