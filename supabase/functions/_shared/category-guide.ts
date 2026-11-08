@@ -65,6 +65,7 @@ export function buildCategoryGuide(opts: {
   lines.push('2. Otherwise, SDLC / software-delivery-process work, ops decks and ops process diagrams are JOB by default.');
   lines.push('3. Employer signals (my manager, my team, standup, onboarding, timesheet, benefits, compliance training, the employer\'s tools, colleagues or clients) mean JOB.');
   lines.push('4. Getting the next role (applying, interviewing, recruiters, LinkedIn, résumé/CV, career coach) is CAREER -- even if a company or tool is named, e.g. an interview with a recruiter from a tool vendor is CAREER.');
+  lines.push('4b. Updating LinkedIn or a résumé to reflect the CURRENT job (adding the new role, its job history, certificates earned for it) is JOB (owner ruling 2026-11-08); LinkedIn work aimed at the next role stays CAREER.');
   lines.push('5. Generic work with no owner signal at all ("prepare slides for the client meeting", "finish the quarterly deck") is JOB.');
   lines.push('6. Learning a tool on a self-paced course is EDUCATION; a formal degree program\'s work is PROF_EDUCATION.');
   return lines.join('\n');
@@ -87,6 +88,7 @@ export function buildRequestContextBlock(context: unknown): string {
   return [
     "THE USER'S OWN MESSAGE THAT REQUESTED THESE TASKS (context only -- never create a task from it):",
     `"""${text}"""`,
-    'Use it to decide category. A framing it states (e.g. "for work", "my work priorities today") applies to EVERY task in this input unless a line says otherwise.',
+    'Use it to decide category. A framing it states (e.g. "for work", "my work priorities today", "priorities I need to work on today") applies to EVERY task in this input unless a line clearly says otherwise (a personal errand, family, health, a class).',
+    'A work framing means JOB for every such line: it outranks the name hints and the default rules above, because the user has said what these tasks are for.',
   ].join('\n');
 }
