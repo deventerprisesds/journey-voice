@@ -1,9 +1,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
+import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone, localDateToUtcBounds, resolveCreatedSince } from "../_shared/timezone.ts";
 import { activityBusySlots, resolveActivities, normalizeActivity, matchActivity, planPush, toMinutes, minutesToHHMM, parseClockTime, type PushItem } from "../_shared/activities.ts";
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
-import { CATEGORY_KEYS, normalizeCategory, recognizeCategory } from "../_shared/categories.ts";
+import { CATEGORY_KEYS, normalizeCategory, normalizePriority, recognizeCategory } from "../_shared/categories.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, activeCaveats } from "../_shared/scheduling-defaults.ts";
 import { mintCaller } from "../_shared/push-auth.ts";
@@ -642,7 +642,16 @@ async function getTasks(supabase: any, userId: string, args: any, timezone: stri
       : [];
     const isSearch = rawSearch.length > 0;
 
+    // created_since: tasks CREATED on/after an instant ('today' = local midnight in the user's timezone), so
+    // "what did you add today" is answerable. An unreadable value is an error, never a silent "no filter".
+    const createdSince = resolveCreatedSince(args.created_since, timezone);
+    if (createdSince && 'error' in createdSince) {
+      return { success: false, error: createdSince.error };
+    }
+    const createdSinceIso = createdSince ? createdSince.iso : null;
+
     let query = supabase.from('tasks').select('*').eq('user_id', userId);
+    if (createdSinceIso) query = query.gte('created_at', createdSinceIso);
     
     // Apply status filter (V2: support group aliases ACTIVE/WORKABLE)
     if (args.status) {
@@ -751,8 +760,9 @@ async function getTasks(supabase: any, userId: string, args: any, timezone: stri
       query = query.or(searchTokens.map((tok) => `title.ilike.*${tok}*`).join(','));
     }
 
-    // Search results order by recency (created_at desc); legacy path keeps start_time asc.
-    const ordered = isSearch
+    // Search and created_since results order by recency (created_at desc), so the newest rows fit the 50-row cap;
+    // the legacy path keeps start_time asc.
+    const ordered = (isSearch || createdSinceIso)
       ? query.order('created_at', { ascending: false })
       : query.order('start_time', { ascending: true, nullsFirst: false });
     const { data, error } = await ordered.limit(50);
@@ -771,7 +781,7 @@ async function getTasks(supabase: any, userId: string, args: any, timezone: stri
     return { 
       success: true, 
       result: enrichedTasks,
-      message: `Found ${count} tasks${isSearch ? ` matching "${rawSearch}"` : args.time_filter ? ` for "${args.time_filter}"` : ''} (${scheduled} scheduled, ${unscheduled} unscheduled)`,
+      message: `Found ${count} tasks${isSearch ? ` matching "${rawSearch}"` : args.time_filter ? ` for "${args.time_filter}"` : ''}${createdSinceIso ? ` created since ${createdSinceIso} ("${args.created_since}")` : ''} (${scheduled} scheduled, ${unscheduled} unscheduled)`,
       extractedFacts: { type: 'task_list', count, scheduled, unscheduled, topicGroups: enrichedTasks.topic_groups?.map((t: any) => t.topic_name) || [] }
     };
   } catch (error) {
@@ -1753,16 +1763,19 @@ function getEndOfSundayISO(tz: string): string {
 async function parseAndCreateTasks(
   supabase: any,
   userId: string,
-  args: { text: string; target_date?: string; auto_schedule?: boolean; source_topic_id?: string },
+  args: { text: string; target_date?: string; auto_schedule?: boolean; source_topic_id?: string; context?: string; default_status?: string },
   timezone?: string
 ): Promise<ExecuteToolResponse> {
   const tz = timezone || 'America/New_York';
+  // The user's own message that asked for these tasks (optional). Forwarded to ai-task-parser so a stated framing
+  // ("my work priorities today") reaches the category choice; see docs/qc-evidence/FIX-parse-context-categories.md.
+  const requestContext = typeof args.context === 'string' && args.context.trim() ? args.context.trim() : undefined;
   const autoSchedule = args.auto_schedule !== false; // Default true
   const hasThisWeek = /this\s+week/i.test(args.text);
   // Detect any explicit date phrase — used to avoid inventing a deadline for priority tasks
   const hasDatePhrase = /\b(today|tonight|tomorrow|this\s+week|next\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(args.text);
 
-  console.log(`[PARSE_AND_CREATE] Input: "${args.text}", target_date: ${args.target_date}, auto_schedule: ${autoSchedule}, tz: ${tz}, hasThisWeek: ${hasThisWeek}, hasDatePhrase: ${hasDatePhrase}`);
+  console.log(`[PARSE_AND_CREATE] Input: "${args.text}", target_date: ${args.target_date}, auto_schedule: ${autoSchedule}, tz: ${tz}, hasThisWeek: ${hasThisWeek}, hasDatePhrase: ${hasDatePhrase}, context: ${requestContext ? JSON.stringify(requestContext.slice(0, 200)) : 'none'}`);
   
   if (!args.text || args.text.trim().length === 0) {
     return { success: false, error: "Task text is required" };
@@ -1824,7 +1837,8 @@ async function parseAndCreateTasks(
           userId,
           boardId: board.id,
           existingTasks: existingTasks || [],
-          targetDate: targetDate ? `${targetDate}T12:00:00` : undefined
+          targetDate: targetDate ? `${targetDate}T12:00:00` : undefined,
+          context: requestContext,
         })
       }
     );
@@ -1891,7 +1905,8 @@ async function parseAndCreateTasks(
       const taskData = {
         title: task.title,
         description: task.description || null,
-        priority: (task.priority || 'MEDIUM').toUpperCase(),
+        // Only a task_priority enum value reaches the insert; anything else (11-07: "BACKLOG") becomes MEDIUM.
+        priority: normalizePriority(task.priority),
         category: normalizeCategory(task.category),
         status: task.status || args.default_status || ((normalizedStartTime || normalizedDueDate) ? 'UP_NEXT' : 'BACKLOG'),
         is_priority: isPriority,

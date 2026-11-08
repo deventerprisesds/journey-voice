@@ -271,3 +271,42 @@ export function formatInTimezone(
     return isoDateTime;
   }
 }
+
+/**
+ * Resolve get_tasks `created_since` to a UTC instant. Added 2026-11-08: "what did you add today" had no tool that
+ * could answer it -- get_tasks orders by start_time with a 50-row cap, so 27 unscheduled tasks created that morning
+ * were unreachable (docs/qc-evidence/FINDINGS-iris-bulk-task-categories.md 3a).
+ *   - 'today' / 'yesterday'  -> local midnight of that day in `tz`
+ *   - 'YYYY-MM-DD'           -> local midnight of that date in `tz`
+ *   - any ISO timestamp      -> that instant (an offset-less one is read as local to `tz`)
+ * Returns null for an absent/blank value, and { error } for one it cannot read (never a silent "no filter").
+ */
+export function resolveCreatedSince(
+  raw: unknown,
+  tz: string,
+  now: Date = new Date(),
+): { iso: string } | { error: string } | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'string') return { error: `created_since must be a string, got ${typeof raw}` };
+  const v = raw.trim();
+  if (!v) return null;
+  const lower = v.toLowerCase();
+  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: tz });
+  if (lower === 'today' || lower === 'yesterday') {
+    const [y, m, d] = fmt.format(now).split('-').map(Number);
+    const day = new Date(Date.UTC(y, m - 1, d - (lower === 'yesterday' ? 1 : 0)));
+    return { iso: zonedTimeToUtc(day.toISOString().slice(0, 10), '00:00:00', tz) };
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+    const probe = new Date(`${v}T00:00:00Z`);
+    if (isNaN(probe.getTime()) || probe.toISOString().slice(0, 10) !== v) return { error: `created_since "${v}" is not a real date` };
+    return { iso: zonedTimeToUtc(v, '00:00:00', tz) };
+  }
+  const m = v.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?)(?:\.\d+)?$/);
+  if (m) return { iso: zonedTimeToUtc(m[1], m[2], tz) };
+  const t = new Date(v);
+  if (isNaN(t.getTime()) || !/^\d{4}-\d{2}-\d{2}T/.test(v)) {
+    return { error: `created_since "${v}" is not 'today', 'yesterday', YYYY-MM-DD or an ISO timestamp` };
+  }
+  return { iso: t.toISOString() };
+}

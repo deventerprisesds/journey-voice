@@ -135,3 +135,17 @@ export function laneCoversCategory(lane: TaskCategory, taskCategory: unknown): b
   if (!cat) return false;
   return cat === lane || KEYWORD_LANE_ALIASES[cat] === lane;
 }
+
+/**
+ * Every value of the Postgres enum public.task_priority. A model-supplied priority outside this list must never
+ * reach an insert: on 2026-11-07 ai-task-parser returned priority "BACKLOG" (a STATUS) for 11 tasks and every
+ * insert died with 22P02 (docs/qc-evidence/FINDINGS-iris-bulk-task-categories.md 2e).
+ */
+export const TASK_PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'] as const;
+export type TaskPriority = typeof TASK_PRIORITIES[number];
+
+/** A task_priority value for any input: the enum name it spells (case/space-insensitive), otherwise MEDIUM. */
+export function normalizePriority(raw: unknown): TaskPriority {
+  const up = typeof raw === 'string' ? raw.trim().toUpperCase() : '';
+  return (TASK_PRIORITIES as readonly string[]).includes(up) ? up as TaskPriority : 'MEDIUM';
+}

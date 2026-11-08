@@ -2,7 +2,7 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { CATEGORY_KEYS, normalizeCategory } from "../_shared/categories.ts";
-import { buildCategoryGuide, categoryHintsFromKeywords } from "../_shared/category-guide.ts";
+import { buildCategoryGuide, buildRequestContextBlock, categoryHintsFromKeywords } from "../_shared/category-guide.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -69,7 +69,7 @@ serve(async (req) => {
   }
 
   try {
-    const { text, mode = 'single', timezone, userId, boardId, existingTasks = [], targetDate } = await req.json();
+    const { text, mode = 'single', timezone, userId, boardId, existingTasks = [], targetDate, context } = await req.json();
     
     console.log('📥 Received request:', { 
       text: text?.substring(0, 50), 
@@ -77,7 +77,8 @@ serve(async (req) => {
       timezone,
       hasContext: !!(userId && boardId),
       existingTasksCount: existingTasks.length,
-      targetDate: targetDate || 'none'
+      targetDate: targetDate || 'none',
+      hasRequestContext: typeof context === 'string' && context.trim().length > 0,
     });
     
     if (!text) {
@@ -118,6 +119,8 @@ serve(async (req) => {
       }
     }
     const categoryGuide = buildCategoryGuide({ employer, hints: categoryHints });
+    // The user's own request (parse_and_create_tasks `context`), so a stated framing reaches the category choice.
+    const requestContextBlock = buildRequestContextBlock(context);
 
     // Get current date for context - USE USER'S TIMEZONE
     const now = new Date();
@@ -237,7 +240,7 @@ LIFE (Personal/non-work activities):
 - Social events not related to work/business
 - Examples: "Pick up groceries", "Doctor appointment", "Dinner with friends"
 
-${categoryGuide}
+${categoryGuide}${requestContextBlock ? `\n\n${requestContextBlock}` : ''}
 
 CRITICAL RULES:
 1. If task mentions MIT, EMBA, or university in a LEARNING context → EDUCATION

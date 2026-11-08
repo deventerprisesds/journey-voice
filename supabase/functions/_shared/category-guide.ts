@@ -69,3 +69,24 @@ export function buildCategoryGuide(opts: {
   lines.push('6. Learning a tool on a self-paced course is EDUCATION; a formal degree program\'s work is PROF_EDUCATION.');
   return lines.join('\n');
 }
+
+/** Longest request context the parser prompt carries; a longer message is cut, never dropped. */
+export const REQUEST_CONTEXT_MAX_CHARS = 1000;
+
+/**
+ * The user's own message that asked for these tasks, as a prompt block for the category AI -- or '' when there is
+ * none. Added 2026-11-08 (docs/qc-evidence/FIX-parse-context-categories.md): Huddle sent 23 work lines as bare
+ * titles and dropped the owner's preface, so "Hang my panel on the wall" and "Clean my office" read as LIFE.
+ * The context is guidance only: the parser must never turn it into a task of its own.
+ */
+export function buildRequestContextBlock(context: unknown): string {
+  if (typeof context !== 'string') return '';
+  const flat = context.replace(/\s+/g, ' ').trim();
+  if (!flat) return '';
+  const text = flat.length > REQUEST_CONTEXT_MAX_CHARS ? `${flat.slice(0, REQUEST_CONTEXT_MAX_CHARS)}…` : flat;
+  return [
+    "THE USER'S OWN MESSAGE THAT REQUESTED THESE TASKS (context only -- never create a task from it):",
+    `"""${text}"""`,
+    'Use it to decide category. A framing it states (e.g. "for work", "my work priorities today") applies to EVERY task in this input unless a line says otherwise.',
+  ].join('\n');
+}

@@ -40,6 +40,7 @@ export function getToolDefinitions(): ToolDefinition[] {
         properties: {
           query: { type: "string", description: "Search query or keywords" },
           time_filter: { type: "string", description: "Time period like 'past week', 'yesterday'" },
+          created_since: { type: "string", description: "Only tasks CREATED on/after this point: 'today' or 'yesterday' (midnight in the user's timezone), a YYYY-MM-DD date, or an ISO timestamp. Use for 'what did you add today / what did I create this morning'. Newest first. Unlike time_filter it ignores when a task is scheduled or due." },
           status: { 
             type: "string", 
             enum: ["BACKLOG", "TODO", "READY", "UP_NEXT", "DOING", "IN_REVIEW", "DONE", "BLOCKED", "PLANNING", "ACTIVE", "WORKABLE"],
@@ -409,6 +410,10 @@ export function getToolDefinitions(): ToolDefinition[] {
           auto_schedule: { 
             type: "boolean", 
             description: "If true, automatically find optimal time slots for tasks based on user preferences and calendar. Default: true" 
+          },
+          context: {
+            type: "string",
+            description: "Optional. The user's own message that asked for these tasks, verbatim (e.g. 'I have several priorities I need to work on today'). Used ONLY to choose each task's category: a framing it states (e.g. 'for work') applies to every task unless a line says otherwise. Never parsed into tasks itself."
           }
         },
         required: ["text"]
