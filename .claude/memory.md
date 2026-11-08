@@ -13,6 +13,10 @@ Last updated: 2026-11-05
 > the same reason: its ACT entries each carry their own date.
 
 
+## Phone push "sent but not shown" — read the phone's own report (2026-11-08)
+- `send-push-notification` logging "FCM sent … success" only proves Google accepted the push. Whether the phone SHOWED it is reported by the app: activity_log rows with activity_type `android_alarm_trace`, messages `FCM_RX`, `FCM_FIRE`, and (from Huddle v1.0.17 / android-bridge-template #29) `NOTIF_DIAG … verdict=<SHOWN|APP_NOTIFICATIONS_OFF|CHANNEL_OFF|CHANNEL_MISSING|POSTED_BUT_NOT_IN_SHADE|NOT_POSTED_BY_APP>`.
+- Pushes with no task now carry a TRACE-ONLY token (journey-voice #108); `verifyActionToken` refuses it unless `allowTraceOnly` — never pass that flag outside alarm-action's trace op.
+
 ## Feature status / Active work — work-calendar feed from EDS OneDrive (2026-11-08, LIVE; owner NOT yet confirmed in the app)
 - **What:** the owner's work mailbox sits in another company's tenant that refuses our Graph app. His Power Automate flow publishes `/automation/appointments/appointments.json` to his EDS OneDrive. TaskOS reads it in `calendar-delta-sync` (`_shared/onedrive-feed.ts` + `onedrive-feed-sync.ts`) and writes read-only rows to `external_calendar_events` (`calendar_id='onedrive-feed'`, ids `feed:<mailbox>:<id>`, no bodies), anchored to the EDS Outlook connection. Daily brief, meetings digest and planner pick them up with no per-feature code.
 - **Key:** the SAME app-only Graph key as Huddle (`AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET` edge secrets) + `TASKOS_ONEDRIVE_FEED` binding. journey-voice is a PERSONAL-account repo, so the Huddle org's secrets cannot reach it: huddle-extension-app `taskos-feed-key.yml` copied them into journey repo secrets (run 42448691432); `deploy-supabase-functions.yml` syncs them to edge secrets when set.

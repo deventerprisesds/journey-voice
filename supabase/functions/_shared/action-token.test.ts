@@ -3,7 +3,7 @@
 //       change, so tampering, expiry and prefix handling must be pinned, not assumed.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mintActionToken, verifyActionToken, isUuid, b64urlEncode, b64urlDecode } from './action-token.ts';
+import { mintActionToken, mintTraceToken, verifyActionToken, isUuid, b64urlEncode, b64urlDecode, TRACE_ONLY_TASK } from './action-token.ts';
 
 const SECRET = 'test-service-role-key';
 const U = '113eec07-017c-44e5-8679-6a35e3a1197c';
@@ -58,4 +58,24 @@ test('wrong prefix, wrong shape and garbage are rejected', async () => {
 test('isUuid accepts task ids and rejects the strings the phone has historically sent', () => {
   assert.equal(isUuid(T), true);
   for (const bad of ['', 'null', 'undefined', 'test-task-001', 'rem-123']) assert.equal(isUuid(bad), false);
+});
+
+test('TRACE-ONLY: a trace token is REFUSED by default (cannot change a task)', async () => {
+  const tok = await mintTraceToken(U, { nowSec: NOW, secret: SECRET });
+  assert.equal(await verifyActionToken(tok, { nowSec: NOW + 60, secret: SECRET }), null);
+});
+
+test('TRACE-ONLY: accepted only when the caller allows it (the trace op), with the sentinel task', async () => {
+  const tok = await mintTraceToken(U, { nowSec: NOW, secret: SECRET });
+  const v = await verifyActionToken(tok, { nowSec: NOW + 60, secret: SECRET, allowTraceOnly: true });
+  assert.ok(v);
+  assert.equal(v.userId, U);
+  assert.equal(v.taskId, TRACE_ONLY_TASK);
+  assert.equal(isUuid(v.taskId), false);
+});
+
+test('TRACE-ONLY: allowTraceOnly does not weaken a normal task token', async () => {
+  const tok = await mintActionToken(U, T, { nowSec: NOW, secret: SECRET });
+  const v = await verifyActionToken(tok, { nowSec: NOW + 60, secret: SECRET, allowTraceOnly: true });
+  assert.equal(v?.taskId, T);
 });

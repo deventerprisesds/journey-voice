@@ -84,7 +84,7 @@ export async function mintActionToken(
  */
 export async function verifyActionToken(
   token: string,
-  opts: { nowSec?: number; graceSec?: number; secret?: string } = {},
+  opts: { nowSec?: number; graceSec?: number; secret?: string; allowTraceOnly?: boolean } = {},
 ): Promise<(ActionClaims & { expired: boolean }) | null> {
   if (typeof token !== "string") return null;
   const parts = token.split(".");
@@ -107,10 +107,28 @@ export async function verifyActionToken(
   if (typeof claims.u !== "string" || typeof claims.t !== "string" || typeof claims.exp !== "number") {
     return null;
   }
+  // A trace-only token authorises diagnostics and nothing else (see TRACE_ONLY_TASK).
+  if (claims.t === TRACE_ONLY_TASK && opts.allowTraceOnly !== true) return null;
   const now = opts.nowSec ?? Math.floor(Date.now() / 1000);
   const expired = now > claims.exp;
   if (expired && now > claims.exp + (opts.graceSec ?? 0)) return null;
   return { userId: claims.u, taskId: claims.t, exp: claims.exp, expired };
+}
+
+/**
+ * TRACE-ONLY tokens (owner, 2026-11-08: "update the huddle app to report back and make debugging
+ * cleaner"). Every phone push that has NO task gets one so the app can report receive/display
+ * diagnostics through alarm-action's trace op. Same format, signed the same way; the task slot holds
+ * this sentinel, which is never a task id. verifyActionToken REFUSES it unless the caller passes
+ * allowTraceOnly -- only the trace op does -- so it can never change a task.
+ */
+export const TRACE_ONLY_TASK = "trace-only";
+
+export function mintTraceToken(
+  userId: string,
+  opts: { ttlSec?: number; nowSec?: number; secret?: string } = {},
+): Promise<string> {
+  return mintActionToken(userId, TRACE_ONLY_TASK, opts);
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
