@@ -6,7 +6,7 @@
 // Run: node --experimental-strip-types --test supabase/functions/_shared/category-guide.test.ts
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCategoryGuide, categoryHintsFromKeywords } from './category-guide.ts';
+import { buildCategoryGuide, categoryHintsFromKeywords, employerNames } from './category-guide.ts';
 import { CATEGORY_KEYS } from './categories.ts';
 
 describe('categoryHintsFromKeywords', () => {
@@ -58,5 +58,18 @@ describe('buildCategoryGuide', () => {
   it('G-7 a named own product beats the SDLC default (owner ruling 2026-11-04, scorecard E-21)', () => {
     const g = buildCategoryGuide({ hints: [{ name: 'sidecar', category: 'VENTURES' }] });
     assert.match(g, /NAME HINTS .*this beats the SDLC default/);
+  });
+});
+
+describe('employer with a parent company (Profile > Company = "Trinnex (a CDM Smith company)", 2026-11-08)', () => {
+  it('G-8 the parenthetical yields the names a task would actually use', () => {
+    assert.deepEqual(employerNames('Trinnex (a CDM Smith company)'), ['Trinnex', 'CDM Smith']);
+    assert.deepEqual(employerNames('Trinnex'), ['Trinnex']);
+    assert.deepEqual(employerNames('Acme (part of Globex Group)'), ['Acme', 'Globex']);
+  });
+  it('G-9 the briefing names both, and never quotes the whole parenthetical as the word to look for', () => {
+    const g = buildCategoryGuide({ employer: 'Trinnex (a CDM Smith company)' });
+    assert.match(g, /THE OWNER'S EMPLOYER is Trinnex \(a CDM Smith company\)\. Work for Trinnex or CDM Smith is JOB whether or not "Trinnex" or "CDM Smith" appears in the task\./);
+    assert.doesNotMatch(g, /"Trinnex \(a CDM Smith company\)"/);
   });
 });

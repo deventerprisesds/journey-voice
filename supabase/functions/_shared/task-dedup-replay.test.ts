@@ -1,7 +1,8 @@
 // WHAT:       Replays the 2026-11-07 Iris duplicates (7 journey calls, 23 originals + 37 repeats) through journey's
 //             task-dedup -- the REAL runDedup entry point with the guard switched on -- offline, signature layer.
-// WHY:        journey's dedup is OFF for the owner (config.dedup null). Before deciding to switch it on he needs to know
-//             what it would have caught and whether it would have wrongly merged any of his 23 distinct work items.
+// WHY:        on 11-07 journey's dedup was OFF for the owner (config.dedup null). The owner had it switched ON on
+//             2026-11-08 (config.dedup.enabled = true), so this is now a REGRESSION CHECK on the live setting: what it
+//             catches of the 11-07 repeats, and that it never merges any of his 23 distinct work items.
 //             The semantic layer needs real embeddings, so it is measured by scripts/replay-task-dedup.mjs on a runner
 //             (eval-job-category.yml job=dedup-replay); this file pins the deterministic half so it cannot drift.
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
@@ -61,8 +62,9 @@ describe('11-07 replay through runDedup, signature layer', () => {
     for (const c of F.calls.slice(1)) for (const t of c.parsed) assert.ok(Number.isInteger(F.restates[t]), t);
   });
 
-  it('R-1 the owner config today ({dedup: null}) leaves the guard OFF, which is why none of this ran', () => {
+  it('R-1 the 11-07 config ({dedup: null}) was OFF, which is why none of this ran; the 11-08 setting is ON', () => {
     assert.equal(resolveDedupConfig({ dedup: null }).enabled, false);
+    assert.equal(resolveDedupConfig({ dedup: { enabled: true } }).enabled, true); // live since 2026-11-08
   });
 
   it('R-2 no false merge: all 23 distinct work items in call 1 survive', async () => {
