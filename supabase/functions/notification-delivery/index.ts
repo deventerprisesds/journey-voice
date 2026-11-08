@@ -10,6 +10,7 @@ import {
 import { renderScheduledCall, containsCallScript, CallScriptLeakError } from "../_shared/digest-content.ts";
 import { renderBriefingBody, renderBriefingHtml, nextDays } from "./notification-body.ts";
 import { irisWindowRequest } from "./iris-window.ts";
+import { batchLine } from "./batch-line.ts";
 import { localDateToUtcBounds } from "../_shared/timezone.ts";
 
 // Notification types that become the phone's full-screen alarm (channel `calendar_events`).
@@ -854,13 +855,7 @@ serve(async (req) => {
               body = '• ';
             }
             
-            const reminderTexts = batchNotifications.map((n: any) => {
-              if (n.notification_type === 'scheduled_reminder') return `${n.title}: ${n.body}`;
-              if (n.notification_type === 'scheduled_start_now') return `"${n.body.match(/"([^"]+)"/)?.[1] || 'Task'}" is starting now`;
-              if (n.notification_type.includes('due_reminder')) return `"${n.body.match(/"([^"]+)"/)?.[1] || 'Task'}" is due`;
-              if (n.notification_type.includes('overdue_reminder')) return `"${n.body.match(/"([^"]+)"/)?.[1] || 'Task'}" is overdue`;
-              return n.body;
-            });
+            const reminderTexts = batchNotifications.map((n: any) => batchLine(n));
             body += reminderTexts.join('\n• ');
           }
 
