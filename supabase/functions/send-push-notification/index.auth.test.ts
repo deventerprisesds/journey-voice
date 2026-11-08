@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ENV, setDb, loadHandler, post, captureConsole, jwtUsers, ops, type Db } from '../../../docs/qc-evidence/probes/harness.ts';
-import { verifyActionToken } from '../_shared/action-token.ts';
+import { verifyActionToken, TRACE_ONLY_TASK } from '../_shared/action-token.ts';
 
 const X = '11111111-1111-4111-8111-111111111111';
 const Y = '22222222-2222-4222-8222-222222222222';
@@ -137,4 +137,25 @@ test("caller = owner's JWT but another user's task: NO token (both checks hold)"
   const r = await send({ ...alarmForX, data: { type: 'alarm', taskId: B } }, { authorization: `Bearer ${JWT_X}` });
   assert.equal(r.body.delivered, 2); assert.equal(r.fcm[0].actionToken, undefined);
   assert.match(r.log, /task does not belong to userId/);
+});
+
+test('REPORT-BACK: a push with no task carries a trace-only token (diagnostics only), no action token', async () => {
+  setDb(freshDb());
+  const r = await send({ userId: X, title: 't', body: 'b', channel: 'messages', data: { tag: 'msg-1' } });
+  assert.equal(r.status, 200);
+  const d = r.fcm[0];
+  assert.equal(d.actionToken, undefined);
+  assert.ok(d.traceToken, 'traceToken present');
+  assert.match(d.traceUrl, /\/functions\/v1\/alarm-action$/);
+  assert.equal(await verifyActionToken(d.traceToken, { secret: ENV.SUPABASE_SERVICE_ROLE_KEY }), null, 'refused for status changes');
+  const v = await verifyActionToken(d.traceToken, { secret: ENV.SUPABASE_SERVICE_ROLE_KEY, allowTraceOnly: true });
+  assert.equal(v?.userId, X);
+  assert.equal(v?.taskId, TRACE_ONLY_TASK);
+});
+
+test('REPORT-BACK: an anonymous caller gets no trace token either', async () => {
+  setDb(freshDb());
+  const r = await send({ userId: X, title: 't', body: 'b', channel: 'messages', data: {} }, {});
+  assert.equal(r.fcm.length, 1, 'the push itself still goes out to an anonymous caller');
+  assert.equal(r.fcm[0].traceToken, undefined);
 });

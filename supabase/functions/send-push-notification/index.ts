@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import webpush from "npm:web-push@3.6.7";
-import { mintActionToken, isUuid } from "../_shared/action-token.ts";
+import { mintActionToken, mintTraceToken, isUuid } from "../_shared/action-token.ts";
 import { taskBelongsTo, mintCaller } from "../_shared/push-auth.ts";
 
 const corsHeaders = {
@@ -272,6 +272,21 @@ serve(async (req) => {
         }
       } catch (e) {
         console.warn('[send-push-notification] action token mint failed:', e instanceof Error ? e.message : e);
+      }
+    }
+
+    // REPORT-BACK for pushes with no task (owner, 2026-11-08: "update the huddle app to report back").
+    // A trace-only token (alarm-action accepts it for diagnostics ONLY -- never a status change) lets the
+    // phone app report "received / notifications allowed / channel on / posted" with no login. Same
+    // caller rule as the task token above. A mint failure never blocks delivery.
+    if (!fcmData.actionToken) {
+      try {
+        if ((await mintCaller(req, supabaseClient, userId, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '')) !== 'none') {
+          fcmData.traceToken = await mintTraceToken(userId);
+          fcmData.traceUrl = `${(Deno.env.get('SUPABASE_URL') ?? '').replace(/\/$/, '')}/functions/v1/alarm-action`;
+        }
+      } catch (e) {
+        console.warn('[send-push-notification] trace token mint failed:', e instanceof Error ? e.message : e);
       }
     }
 

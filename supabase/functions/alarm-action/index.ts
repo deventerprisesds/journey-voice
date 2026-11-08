@@ -60,7 +60,8 @@ serve(async (req) => {
 
   try {
     if (body?.op === "trace") {
-      const claims = await verifyActionToken(body.token, { graceSec: TRACE_GRACE_SEC });
+      // allowTraceOnly: the trace op is the ONE place a trace-only token (pushes with no task) is accepted.
+      const claims = await verifyActionToken(body.token, { graceSec: TRACE_GRACE_SEC, allowTraceOnly: true });
       if (!claims) return json({ ok: false, reason: "bad_token" }, 401);
       const lines = Array.isArray(body.lines) ? body.lines.slice(0, MAX_TRACE_LINES) : [];
       const rows = lines
