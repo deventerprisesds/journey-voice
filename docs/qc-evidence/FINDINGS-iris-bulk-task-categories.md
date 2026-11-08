@@ -87,7 +87,7 @@ The 23-title parse alone took 31s (14:38:55.8 → 14:39:26.6), plus ~23s of Iris
 ### 2e. Side findings (OBSERVED, not asked)
 - `execute-tool/index.ts:1894` `priority: (task.priority || 'MEDIUM').toUpperCase()` accepts anything the model returns. Call 2's 11 inserts all died on `priority="BACKLOG"`. That accident prevented 11 more duplicates, and the response still went back as a parse result.
 - The same log window shows `batch-calendar-scheduler` `RangeError: Invalid time value` in `_shared/timezone.ts:69` (`zonedTimeToUtc`) at 14:39:58.7.
-- Turn-1 row `aac514c3` (15:25 "Measure my panel") is NOT in `tasks.journey_tasks`, although the mirror holds 43 rows created in the window. Not investigated.
+- Row `aac514c3` (the 15:25 "Measure my panel" copy) is NOT in `tasks.journey_tasks`, although the mirror holds 43 rows created in the window. Not investigated.
 
 ### 2f. Smallest fix locations (describe only)
 1. **Stop the re-run, in Huddle `runBounded`/`mergeAgentResult`** (`huddle.functions.ts:7205-7236`, `:6869`). When an attempt that has already dispatched a mutating tool times out, keep the record of that dispatch and do not re-queue the agent blind. Either carry the dispatched tool uses into the resume state the way `createdTaskTitles` already is (`buildResumeState` `:7241`), or re-queue with a directive naming what was already sent. This extends the existing chunk/resume mechanism. Without it, every slow create can multiply.
