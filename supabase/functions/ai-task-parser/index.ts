@@ -207,38 +207,9 @@ DURATION ESTIMATES:
 - Workouts: 60 minutes
 - Social events: 120 minutes
 
-CATEGORY INFERENCE - USE SEMANTIC CONTEXT, NOT JUST KEYWORDS:
-
-EDUCATION (Academic work where YOU are the student/learner):
-- Attending classes at MIT, EMBA, university, school, college
-- Studying, learning, coursework, assignments, exams, homework
-- Academic projects, research papers, thesis work
-- Reading textbooks, course materials
-- Examples: "Study for MIT exam", "Complete EMBA assignment", "Attend university lecture"
-
-VENTURES (Business/entrepreneurial activities):
-- Starting/running a business, startups, ventures
-- Sales, marketing, pitching, finding customers/clients
-- Product development for your business
-- Networking for business opportunities
-- Examples: "Find universities to sell products to", "Pitch to potential clients", "Research market opportunities"
-
-JOB (Work for the owner's employer):
-- Work tasks, job responsibilities, meetings with colleagues/boss, standups, 1:1s
-- Onboarding, timesheets, benefits, compliance training, the employer's tools
-- SDLC / software-delivery work, ops decks, ops process diagrams (unless it names one of the owner's own products: then VENTURES)
-- Examples: "Prepare presentation for client", "Team meeting", "Performance review", "Complete benefits enrollment"
-
-CAREER (Getting the NEXT role -- not the current job):
-- Job applications, interviews, recruiters, LinkedIn, résumé/CV
-- Career coaching, career research
-- Examples: "Apply for the Director role at Acme", "Update LinkedIn headline", "Email career coach"
-
-LIFE (Personal/non-work activities):
-- Family, friends, personal errands, household tasks
-- Personal health, fitness, hobbies
-- Social events not related to work/business
-- Examples: "Pick up groceries", "Doctor appointment", "Dinner with friends"
+CATEGORY: the briefing below is the ONE definition of every category (it replaced the hand-typed per-category
+lists that used to sit here and contradicted it, e.g. "LinkedIn" under CAREER vs the current-job ruling).
+Decide EACH task's category on its own against it -- in a list, never let earlier lines pull later ones.
 
 ${categoryGuide}${requestContextBlock ? `\n\n${requestContextBlock}` : ''}
 
@@ -269,14 +240,6 @@ EDUCATION - Self-paced personal learning without strict institutional deadlines:
 - Personal study, skill development
 - Flexible scheduling
 - Examples: "Complete Coursera course", "Learn Python", "Get AWS certified", "Read textbook"
-
-Primary task types:
-- LIFE: Personal activities, health, family, hobbies, self-care
-- JOB: Work for the employer: job responsibilities, meetings, standups, the employer's tools
-- CAREER: Getting the next role: applications, interviews, LinkedIn, career coach
-- VENTURES: Business ideas, entrepreneurship, side projects
-- PROF_EDUCATION: Formal degree programs (MIT, EMBA, universities)
-- EDUCATION: Self-paced learning (Coursera, certifications, personal study)
 
 Examples (note the status is a WORKFLOW state in every one, never the category):
 - "Doctor appointment" → category: "LIFE", status: "BACKLOG"
