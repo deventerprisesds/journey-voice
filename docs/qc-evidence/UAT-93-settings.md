@@ -60,3 +60,9 @@ Nothing was saved; no field was focused or toggled.
 
 **To close:** publish the current `main` from Lovable, then re-run this workflow (unchanged) — C3/C4
 are the checks that flip.
+
+## Re-run 42488092644 (commit 75b6bf0, crawler fix) — same verdict
+
+C1 PASS, C2 PASS, C3/C4a/C4b FAIL (controls absent). C0 still scanned 1 JS file even with the `./chunk.js`
+pattern. Inference (not proven): the live build is a single bundle, so "not in that file" means not
+served. C0 stays secondary: the rendered DOM is the evidence. Shots: `uat-shots` @ f159f4f.
