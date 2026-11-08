@@ -122,13 +122,17 @@ export function buildCategoryClassifierPrompt(opts: {
   employer?: string | null;
   hints?: Array<{ name: string; category: TaskCategory }>;
   context?: unknown;
+  /** Every title parsed from the same input, so one line is read alongside its siblings (a list of work items). */
+  list?: string[];
 }): string {
   const ctx = buildRequestContextBlock(opts.context);
+  const list = (opts.list ?? []).filter((t) => typeof t === 'string' && t.trim()).slice(0, 60);
   return [
-    `You choose the CATEGORY of ONE task on the owner's task board. Reply with JSON only: {"category": "<one of ${CATEGORY_KEYS.join('|')}>"}.`,
+    `You choose the CATEGORY of ONE task on the owner's task board: the task in the user message. Reply with JSON only: {"category": "<one of ${CATEGORY_KEYS.join('|')}>"}.`,
     '',
     buildCategoryGuide({ employer: opts.employer, hints: opts.hints }),
     ...(ctx ? ['', ctx] : []),
+    ...(list.length > 1 ? ['', 'THE LIST THIS TASK CAME FROM (context only -- read the task alongside its siblings, but categorize ONLY the task in the user message):', ...list.map((t) => `- ${t}`)] : []),
   ].join('\n');
 }
 

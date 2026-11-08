@@ -437,7 +437,7 @@ Examples (category varies; status is a workflow state in every one):
       // because one completion over a long list drifts as a whole (11-07: five work lines filed VENTURES). A failed
       // call keeps the batch's category.
       if (tasks.length > 1) {
-        const classifierPrompt = buildCategoryClassifierPrompt({ employer, hints: categoryHints, context });
+        const classifierPrompt = buildCategoryClassifierPrompt({ employer, hints: categoryHints, context, list: tasks.map((t: any) => String(t.title ?? '')) });
         const picks = await Promise.all(tasks.map((t: any) => classifyCategoryOne(OPENAI_API_KEY, classifierPrompt, String(t.title ?? ''), t.description ?? null)));
         picks.forEach((pick, i) => {
           if (pick && pick !== tasks[i].category) {
