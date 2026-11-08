@@ -1,5 +1,5 @@
 # Project Memory — journey-voice
-Last updated: 2026-11-05
+Last updated: 2026-11-08
 
 > **MOVE THE DATE ABOVE IN THE SAME COMMIT THAT APPENDS A SECTION.** It read `2026-09-21` while
 > this file already carried sections dated 2026-10-08 and 2026-10-12 — three weeks of the header
@@ -11,6 +11,11 @@ Last updated: 2026-11-05
 > convenience and is structurally the most likely thing here to be stale — so it is the one to
 > distrust, never the sections. `actions.md` has no file-level stamp at all, deliberately, for
 > the same reason: its ACT entries each carry their own date.
+
+## Active work — 2026-11-08: UAT + live checks
+- **Huddle "Open in journey" (#137) browser-verified:** verify-uat.yml run 42452482108 (live SWA, 390x844) 8/8 PASS — 463 links, all `journey-voice.lovable.app/tasks?view=kanban&task=<uuid>`, new tab + noopener, 0 console/network errors. Check kept as huddle #162 (`board-deeplink-checks.mjs`). Owner still to tap one link.
+- **#65 live status:** since the 11-05 deploy, 0 `fcm_token_registered` / 0 `android_alarm_action` rows (owner has not run the two checks); pushes still delivering to both phone tokens; Huddle re-registered 11-08 05:53 via service role (accepted). NOT owner-confirmed.
+- **Loss gate #125:** fix round 4 lane killed by restarts repeatedly; resumed each time. Verify loop 5 owed (reuse the stopped brief's slug to clear the verify-loop false block).
 
 ## Active work — 2026-11-05: one paper a night + parked lanes
 - **One paper a night (owner 2026-11-04):** journey #93 merged 053967d, deploy 41895671531 success. `planWorkSessions` allows sessions of at most one paper-type assignment per day; titles matching `config.assignmentSessions.finiteTypeKeywords` (reading, chapter, PowerPoint, slides, presentation…) are finite and may share; a hand-moved paper session pre-claims its night. Settings switch `onePaperPerDay` + word list. Live board 2026-11-05 shows no two-paper night. NOT owner-confirmed.
