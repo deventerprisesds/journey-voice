@@ -13,6 +13,16 @@ Last updated: 2026-11-05
 > the same reason: its ACT entries each carry their own date.
 
 
+## Feature status / Active work — work-calendar feed from EDS OneDrive (2026-11-08, LIVE; owner NOT yet confirmed in the app)
+- **What:** the owner's work mailbox sits in another company's tenant that refuses our Graph app. His Power Automate flow publishes `/automation/appointments/appointments.json` to his EDS OneDrive. TaskOS reads it in `calendar-delta-sync` (`_shared/onedrive-feed.ts` + `onedrive-feed-sync.ts`) and writes read-only rows to `external_calendar_events` (`calendar_id='onedrive-feed'`, ids `feed:<mailbox>:<id>`, no bodies), anchored to the EDS Outlook connection. Daily brief, meetings digest and planner pick them up with no per-feature code.
+- **Key:** the SAME app-only Graph key as Huddle (`AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET` edge secrets) + `TASKOS_ONEDRIVE_FEED` binding. journey-voice is a PERSONAL-account repo, so the Huddle org's secrets cannot reach it: huddle-extension-app `taskos-feed-key.yml` copied them into journey repo secrets (run 42448691432); `deploy-supabase-functions.yml` syncs them to edge secrets when set.
+- **Evidence:** #102 (feed), #103 (app key; reverted the Files.Read sign-in scope), #104 (ledger). The 2026-11-08 05:00:08 UTC sync stored 19 meetings (18 upcoming, 14 in Nov 9-13), all on connection bb04653a. Ledger: `.claude/actions.md` ACT:trinnex-onedrive-taskos.
+- **Decided (owner):** email stays in Huddle (TaskOS has NO email in its daily messages — none existed before); the existing Huddle "same-inbox self" rule (since 2026-10-19) stays.
+
+## Hardening — 2026-11-08: chose a delegated sign-in token where the owner's existing app key fit
+- **Miss:** built #102 on the owner's delegated Outlook refresh token (Files.Read). Owner: "This seems like a patch instead of a long term solution... use graph like huddle using same key". A personal sign-in lapses on password change / sign-out / revocation / 90 idle days and needed a re-consent.
+- **Rule:** for server-side reads of EDS-tenant data, use the existing app-only Graph key; check up front whether the target repo can actually SEE that key (personal-account repos cannot read org secrets) and say so, instead of picking a weaker auth path silently.
+
 ## Nightly scheduling: assignment work spread over time + account switch (#77-#96, 2026-11-04/05; owner NOT yet confirmed in the app)
 - Coursework source = Nexus `content.assignments` (#77); journey `public.assignments` is stale since 2026-04-06.
 - Work sessions `📚 <title> k of m (<course>)` spread before finish-by (#78, #87); Activities count as busy (PASS-3b).
