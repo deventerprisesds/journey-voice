@@ -200,8 +200,9 @@ function mkSupabase(existing: { id: string; external_event_id: string }[], upser
 
 const ENV: Record<string, string> = {
   TASKOS_ONEDRIVE_FEED: RAW_CFG,
-  MICROSOFT_CLIENT_ID: 'cid',
-  MICROSOFT_CLIENT_SECRET: 'csecret',
+  AZURE_TENANT_ID: 'tenant-x',
+  AZURE_CLIENT_ID: 'cid',
+  AZURE_CLIENT_SECRET: 'csecret',
 };
 (globalThis as unknown as { Deno: unknown }).Deno = { env: { get: (k: string) => ENV[k] } };
 
@@ -223,29 +224,32 @@ function mkFetch(opts: { tokenStatus?: number; tokenBody?: string; fileStatus?: 
   return { f, urls, bodies };
 }
 
-test('D1 feature OFF / other account / Google -> nothing fetched, nothing written', async () => {
+test('D1 feature OFF / other account / Google / no app key -> nothing fetched, nothing written', async () => {
   const { client, calls } = mkSupabase([]);
   const { f, urls } = mkFetch();
   const saved = ENV.TASKOS_ONEDRIVE_FEED;
   delete ENV.TASKOS_ONEDRIVE_FEED;
-  assert.deepEqual(await syncFeedCalendar(client, CONN, 'rt', f, NOW), { status: 'off' });
+  assert.deepEqual(await syncFeedCalendar(client, CONN, f, NOW), { status: 'off' });
   ENV.TASKOS_ONEDRIVE_FEED = saved;
-  assert.deepEqual(await syncFeedCalendar(client, { ...CONN, provider_account_email: 'x@example.com' }, 'rt', f, NOW), { status: 'not_this_account' });
-  assert.deepEqual(await syncFeedCalendar(client, { ...CONN, provider: 'google' }, 'rt', f, NOW), { status: 'not_this_account' });
-  assert.deepEqual(await syncFeedCalendar(client, CONN, null, f, NOW), { status: 'needs_reconnect' });
+  assert.deepEqual(await syncFeedCalendar(client, { ...CONN, provider_account_email: 'x@example.com' }, f, NOW), { status: 'not_this_account' });
+  assert.deepEqual(await syncFeedCalendar(client, { ...CONN, provider: 'google' }, f, NOW), { status: 'not_this_account' });
+  const savedSecret = ENV.AZURE_CLIENT_SECRET;
+  delete ENV.AZURE_CLIENT_SECRET;
+  assert.deepEqual(await syncFeedCalendar(client, CONN, f, NOW), { status: 'needs_key' });
+  ENV.AZURE_CLIENT_SECRET = savedSecret;
   assert.equal(urls.length, 0);
   assert.equal(calls.length, 0);
 });
 
-test('D2 Files.Read not yet consented (AADSTS65001) -> needs_reconnect, nothing written', async () => {
+test('D2 app token refused (e.g. AADSTS7000215 bad secret) -> error, file never read, nothing written', async () => {
   const { client, calls } = mkSupabase([]);
-  const { f, urls } = mkFetch({ tokenStatus: 400, tokenBody: '{"error":"invalid_grant","error_description":"AADSTS65001: consent"}' });
-  assert.deepEqual(await syncFeedCalendar(client, CONN, 'rt', f, NOW), { status: 'needs_reconnect' });
+  const { f, urls } = mkFetch({ tokenStatus: 401, tokenBody: '{"error":"invalid_client","error_description":"AADSTS7000215: Invalid client secret"}' });
+  assert.deepEqual(await syncFeedCalendar(client, CONN, f, NOW), { status: 'error' });
   assert.equal(urls.length, 1);
   assert.equal(calls.length, 0);
 });
 
-test('D3 ok: mints a Files.Read token, reads /me/drive path, upserts, removes ONLY stale feed rows', async () => {
+test('D3 ok: app-only token for the tenant, reads the drive account path, upserts, removes ONLY stale feed rows', async () => {
   const existing = [
     { id: 'row-keep', external_event_id: 'feed:work@example.org:AAMkA1' },
     { id: 'row-stale', external_event_id: 'feed:work@example.org:GONE' },
@@ -253,10 +257,13 @@ test('D3 ok: mints a Files.Read token, reads /me/drive path, upserts, removes ON
   ];
   const { client, calls } = mkSupabase(existing);
   const { f, urls, bodies } = mkFetch();
-  const r = await syncFeedCalendar(client, CONN, 'rt', f, NOW);
+  const r = await syncFeedCalendar(client, CONN, f, NOW);
   assert.deepEqual(r, { status: 'ok', upserted: 1, removed: 1, skipped: 0 });
-  assert.match(bodies[0], /scope=https%3A%2F%2Fgraph\.microsoft\.com%2FFiles\.Read/);
-  assert.equal(urls[1], 'https://graph.microsoft.com/v1.0/me/drive/root:/automation/appointments/appointments.json:/content');
+  assert.equal(urls[0], 'https://login.microsoftonline.com/tenant-x/oauth2/v2.0/token');
+  assert.match(bodies[0], /grant_type=client_credentials/);
+  assert.match(bodies[0], /scope=https%3A%2F%2Fgraph\.microsoft\.com%2F\.default/);
+  assert.doesNotMatch(bodies[0], /refresh_token/);
+  assert.equal(urls[1], 'https://graph.microsoft.com/v1.0/users/me%40example.com/drive/root:/automation/appointments/appointments.json:/content');
   const up = calls.find((c) => c.op === 'upsert')!;
   assert.deepEqual(up.opts, { onConflict: 'connection_id,external_event_id', ignoreDuplicates: false });
   const sel = calls.find((c) => c.op === 'select')!;
@@ -273,20 +280,20 @@ test('D4 a rejected snapshot changes NOTHING (last good rows stay)', async () =>
   ] as const) {
     const { client, calls } = mkSupabase([{ id: 'r', external_event_id: 'feed:work@example.org:AAMkA1' }]);
     const { f } = mkFetch({ fileBody: body });
-    assert.deepEqual(await syncFeedCalendar(client, CONN, 'rt', f, NOW), { status });
+    assert.deepEqual(await syncFeedCalendar(client, CONN, f, NOW), { status });
     assert.equal(calls.length, 0, status);
   }
 });
 
 test('D5 missing file -> rejected:missing; oversize -> rejected:too_large; upsert error -> error with no delete', async () => {
   let s = mkSupabase([]);
-  assert.deepEqual(await syncFeedCalendar(s.client, CONN, 'rt', mkFetch({ fileStatus: 404 }).f, NOW), { status: 'rejected:missing' });
+  assert.deepEqual(await syncFeedCalendar(s.client, CONN, mkFetch({ fileStatus: 404 }).f, NOW), { status: 'rejected:missing' });
   const saved = ENV.TASKOS_ONEDRIVE_FEED;
   ENV.TASKOS_ONEDRIVE_FEED = JSON.stringify({ ...JSON.parse(saved), maxBytes: 10 });
-  assert.deepEqual(await syncFeedCalendar(s.client, CONN, 'rt', mkFetch().f, NOW), { status: 'rejected:too_large' });
+  assert.deepEqual(await syncFeedCalendar(s.client, CONN, mkFetch().f, NOW), { status: 'rejected:too_large' });
   ENV.TASKOS_ONEDRIVE_FEED = saved;
   assert.equal(s.calls.length, 0);
   s = mkSupabase([{ id: 'x', external_event_id: 'feed:work@example.org:OLD' }], { message: 'boom' });
-  assert.deepEqual(await syncFeedCalendar(s.client, CONN, 'rt', mkFetch().f, NOW), { status: 'error' });
+  assert.deepEqual(await syncFeedCalendar(s.client, CONN, mkFetch().f, NOW), { status: 'error' });
   assert.equal(s.calls.some((c) => c.op === 'delete'), false);
 });
