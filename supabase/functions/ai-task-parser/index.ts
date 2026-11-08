@@ -242,6 +242,8 @@ LIFE (Personal/non-work activities):
 
 ${categoryGuide}${requestContextBlock ? `\n\n${requestContextBlock}` : ''}
 
+LISTS: when the input has several lines, decide EACH line's category on its own against the briefing above -- re-read THE OWNER'S EMPLOYER, the NAME HINTS and the user's own message for every line. Never let the categories of earlier lines pull later ones.
+
 CRITICAL RULES:
 1. If task mentions MIT, EMBA, or university in a LEARNING context → EDUCATION
 2. If task mentions MIT, EMBA, or university in a SELLING/BUSINESS context → VENTURES
