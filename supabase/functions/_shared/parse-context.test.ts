@@ -127,3 +127,38 @@ describe('get_tasks created_since (fix step 4)', () => {
     assert.equal(t.parameters.properties.created_since?.type, 'string');
   });
 });
+
+describe('per-title category pass after a multi-task parse (fix step 2, batch dilution)', () => {
+  it('PT-1 the classifier prompt carries the same briefing, the request context and the sibling list', async () => {
+    const { buildCategoryClassifierPrompt } = await import('./category-guide.ts');
+    const p = buildCategoryClassifierPrompt({ employer: 'Trinnex (a CDM Smith company)', context: PREFACE, list: ['Measure my panel', 'Create a Trinnex slide template'] });
+    assert.match(p, /Work for Trinnex or CDM Smith is JOB/);
+    assert.ok(p.includes(`"""${PREFACE}"""`));
+    assert.match(p, /categorize ONLY the task in the user message/);
+    assert.match(p, /\n- Measure my panel\n- Create a Trinnex slide template/);
+    assert.match(p, /Reply with JSON only/);
+  });
+  it('PT-2 a one-item list adds no list block', async () => {
+    const { buildCategoryClassifierPrompt } = await import('./category-guide.ts');
+    assert.doesNotMatch(buildCategoryClassifierPrompt({ list: ['only one'] }), /THE LIST THIS TASK CAME FROM/);
+  });
+  it('PT-3 only an exact real category in the reply is accepted', async () => {
+    const { parseCategoryReply } = await import('./category-guide.ts');
+    assert.equal(parseCategoryReply('{"category":"JOB"}'), 'JOB');
+    assert.equal(parseCategoryReply('{"category":"prof education"}'), 'PROF_EDUCATION');
+    for (const bad of ['{"category":"work"}', '{"category":"BACKLOG"}', 'JOB', '', null, '{"cat":"JOB"}']) {
+      assert.equal(parseCategoryReply(bad), null, String(bad));
+    }
+  });
+  it('PT-4 the parser runs the pass for 2+ tasks, in parallel, and keeps the batch category when a call fails', () => {
+    const i = PARSER.indexOf('PER-TITLE CATEGORY PASS');
+    assert.ok(i > 0, 'per-title pass missing');
+    const block = PARSER.slice(i, i + 1200);
+    assert.match(block, /if \(tasks\.length > 1\)/);
+    assert.match(block, /await Promise\.all\(tasks\.map/);
+    assert.match(block, /list: tasks\.map/);
+    assert.match(block, /if \(pick && pick !== tasks\[i\]\.category\)/);
+    // the pass runs BEFORE the bulk/preview branches return
+    assert.ok(i < PARSER.indexOf('BULK MODE THRESHOLD'));
+  });
+});
