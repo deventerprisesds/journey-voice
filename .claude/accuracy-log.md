@@ -582,3 +582,10 @@ and no amount of re-reading my own reasoning would have found it.
 - **Source that would have settled it:** `git merge-base --is-ancestor 61c1903 origin/main` + `git grep Authorization origin/main -- FcmRegistrar.kt` in android-bridge-template.
 - **Pattern:** quoted a version label from memory/summary instead of the artifact; a version number is only meaningful per app AND per branch.
 - **Guard implied:** a precondition naming an APK must name the app, the commit the build came from, and the check that proves it is installed (registration row / token update).
+
+## 2026-11-08 — "the OneDrive work-calendar feed is off for you"
+- **Claim (to owner):** only two opt-in features were off: task dedup and the OneDrive feed.
+- **Ground truth:** the feed is ON. Its switch is the `TASKOS_ONEDRIVE_FEED` edge-function secret (`parseTaskosFeedConfig`, `_shared/onedrive-feed.ts`), not `user_scheduling_prefs`; `external_calendar_events` held `feed:*` rows written 2026-11-08 13:25:57Z (Mon 11-09: Amy Corriveau 8am, Trinnex Orientation 11am, Michael Dean 2pm). Owner caught it: "how did the schedule get my meeting tomorrow?"
+- **Source that would have settled it:** `select … from external_calendar_events where external_event_id like 'feed:%' order by updated_at desc limit 1` — the feature's OUTPUT, not its default.
+- **Pattern:** reported a feature's state from its code default + one config table instead of its live output.
+- **Guard implied:** "X is on/off" must cite the feature's latest output row (or its live switch), never only a default.
