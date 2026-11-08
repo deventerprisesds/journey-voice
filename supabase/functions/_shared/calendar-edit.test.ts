@@ -22,6 +22,7 @@ const ROWS: Record<string, CalendarEventRow[]> = {
     { external_event_id: 'o-1', title: '1:1 with Dana', start_time: '2026-11-05T15:00:00Z', end_time: '2026-11-05T15:30:00Z', provider: 'outlook' },
     { external_event_id: 'g-1', title: 'Study block', start_time: '2026-11-06T13:00:00Z', end_time: '2026-11-06T15:00:00Z', provider: 'google' },
     { external_event_id: 'g-2', title: 'Study block', start_time: '2026-11-06T14:00:00Z', end_time: '2026-11-06T15:00:00Z', provider: 'google' },
+    { external_event_id: 'feed:work@example.com:AAMk1', title: 'Work standup', start_time: '2026-11-07T14:00:00Z', end_time: '2026-11-07T14:30:00Z', provider: 'outlook' },
   ],
   [OTHER]: [
     { external_event_id: 'x-1', title: '1:1 with Dana', start_time: '2026-11-05T15:00:00Z', end_time: '2026-11-05T16:00:00Z', provider: 'outlook' },
@@ -162,4 +163,23 @@ test('matchEventRows: provider filter and window', () => {
   const hits = matchEventRows(ROWS[ME], { match_start_time: '2026-11-06T13:30:00Z', provider: 'google' });
   assert.equal(hits.length, 2);
   assert.equal(matchEventRows(ROWS[ME], { match_start_time: '2026-11-06T18:00:00Z' }).length, 0);
+});
+
+test('FEED: update of a work-calendar feed row is refused read-only with NO token or provider call', async () => {
+  const { deps, calls, tokenCalls } = mkDeps();
+  const r = await updateCalendarEvent(deps, ME, { event_id: 'feed:work@example.com:AAMk1', new_title: 'x' });
+  assert.equal(r.success, false);
+  assert.equal(r.read_only, true);
+  assert.equal(calls.length, 0);
+  assert.equal(tokenCalls.length, 0);
+});
+
+test('FEED: delete of a feed row (found by title+time) is refused read-only with NO provider call', async () => {
+  const { deps, calls } = mkDeps();
+  const r = await deleteCalendarEvent(deps, ME, {
+    match_title: 'Work standup', match_start_time: '2026-11-07T14:00:00Z', user_explicitly_requested: true,
+  });
+  assert.equal(r.success, false);
+  assert.equal(r.read_only, true);
+  assert.equal(calls.length, 0);
 });
