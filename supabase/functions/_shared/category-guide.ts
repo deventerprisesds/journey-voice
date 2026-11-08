@@ -82,8 +82,8 @@ export function buildCategoryGuide(opts: {
   lines.push('1. A task that names one of the owner\'s own products or clients is VENTURES -- even SDLC work for it (owner ruling 2026-11-04: "Write the SDLC doc for Sidecar" is a side project, VENTURES).');
   lines.push('2. Otherwise, SDLC / software-delivery-process work, ops decks and ops process diagrams are JOB by default.');
   lines.push('3. Employer signals (my manager, my team, standup, onboarding, timesheet, benefits, compliance training, the employer\'s tools, colleagues or clients) mean JOB.');
-  lines.push('4. Getting the next role (applying, interviewing, recruiters, LinkedIn, résumé/CV, career coach) is CAREER -- even if a company or tool is named, e.g. an interview with a recruiter from a tool vendor is CAREER.');
-  lines.push('4b. Adding the CURRENT job to LinkedIn or a résumé (the new role\'s job-history entry, certificates earned for it) is JOB (owner ruling 2026-11-08). Any other LinkedIn work (headline, profile, posts, networking) stays CAREER.');
+  lines.push('4. Getting the next role (applying, interviewing, recruiters, résumé/CV, career coach, a LinkedIn headline, profile, posts or networking) is CAREER -- even if a company or tool is named, e.g. an interview with a recruiter from a tool vendor is CAREER.');
+  lines.push('4b. EXCEPTION to rule 4: adding the CURRENT job to LinkedIn or a résumé ("update my LinkedIn job history", certificates earned for the current role) is JOB, not CAREER (owner ruling 2026-11-08). Any other LinkedIn work (headline, profile, posts, networking) stays CAREER.');
   lines.push('5. Generic work with no owner signal at all ("prepare slides for the client meeting", "finish the quarterly deck") is JOB.');
   lines.push('6. Learning a tool on a self-paced course is EDUCATION; a formal degree program\'s work is PROF_EDUCATION.');
   return lines.join('\n');

@@ -74,7 +74,7 @@ describe('employer with a parent company (Profile > Company = "Trinnex (a CDM Sm
   });
   it('G-10 LinkedIn for the CURRENT job is JOB, LinkedIn for the next role stays CAREER (owner ruling 2026-11-08)', () => {
     const g = buildCategoryGuide({});
-    assert.match(g, /4b\. Adding the CURRENT job to LinkedIn or a résumé .* is JOB/);
+    assert.match(g, /4b\. EXCEPTION to rule 4: adding the CURRENT job to LinkedIn or a résumé .* is JOB, not CAREER/);
     assert.match(g, /Any other LinkedIn work \(headline, profile, posts, networking\) stays CAREER/);
   });
 });
