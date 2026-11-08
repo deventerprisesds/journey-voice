@@ -1,0 +1,126 @@
+# WHAT:       real-browser UAT against the LIVE journey/TaskOS web app (https://journey-voice.lovable.app),
+#             signed in as the owner, running a per-app checks module; screenshots -> `uat-shots` branch
+# WHY:        journey-voice had no browser-UAT path; owner asked "Uat verify 93" (2026-11-08). The client
+#             ships via Lovable publish, so "merged to main" does not prove "live" -- only the browser does.
+# SUPERSEDES: nothing. Runner vendored from huddle-extension-app's verify-uat.yml + run-uat.mjs (same shape).
+# SUPERSEDED-BY: nothing -- current
+# EVIDENCE:   docs/qc-evidence/UAT-93-settings.md
+#
+# Auth (no password, no app change): admin generate_link(type=magiclink) with the EXISTING service-role
+# secret CF_SUPABASE_SERVICE_KEY -> exchange its hashed_token at /auth/v1/verify for a session -> the
+# checks module writes it under the app's own localStorage key. generate_link sends no email.
+# Checks are expected to be READ-ONLY.
+
+name: Verify UAT (live journey web app, real browser)
+
+on:
+  # Dispatch-only. The first runs (42487226041, 42488092644) used a temporary branch push trigger, removed before merge.
+  workflow_dispatch:
+    inputs:
+      checks_file:
+        description: "Checks module to run"
+        required: false
+        default: "scripts/uat/settings-coursework-checks.mjs"
+      app_url:
+        description: "Live app origin"
+        required: false
+        default: "https://journey-voice.lovable.app"
+      viewport_w:
+        description: "Viewport width (390 = phone; the Settings tabs become a Select below md)"
+        required: false
+        default: "1440"
+      viewport_h:
+        description: "Viewport height"
+        required: false
+        default: "900"
+
+permissions:
+  contents: write
+
+jobs:
+  verify-uat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Mint owner session (magiclink -> verify)
+        env:
+          SB_URL: https://wwxgajrtmslzklnyplah.supabase.co
+          SB_SERVICE: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
+          OWNER_EMAIL: dev@enterpriseds.io
+          OWNER_ID: a3378f93-d655-4913-b2fa-ca5b1d8020f1
+        run: |
+          set -euo pipefail
+          if [ -z "$SB_SERVICE" ]; then echo "::error::CF_SUPABASE_SERVICE_KEY is empty for this repo"; exit 1; fi
+          # Public anon key, read from the app's own client file (public by design -- see CLAUDE.md).
+          ANON=$(grep -oE 'SUPABASE_PUBLISHABLE_KEY = "[^"]+"' src/integrations/supabase/client.ts | cut -d'"' -f2)
+          LINK=$(curl -sS -X POST "$SB_URL/auth/v1/admin/generate_link" \
+            -H "apikey: $SB_SERVICE" -H "Authorization: Bearer $SB_SERVICE" -H "Content-Type: application/json" \
+            -d "{\"type\":\"magiclink\",\"email\":\"$OWNER_EMAIL\"}")
+          HASH=$(echo "$LINK" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("hashed_token") or (d.get("properties") or {}).get("hashed_token") or "")')
+          if [ -z "$HASH" ]; then echo "::error::generate_link returned no hashed_token (keys: $(echo "$LINK" | python3 -c 'import json,sys; print(list(json.load(sys.stdin).keys()))'))"; exit 1; fi
+          echo "::add-mask::$HASH"
+          curl -sS -X POST "$SB_URL/auth/v1/verify" -H "apikey: $ANON" -H "Content-Type: application/json" \
+            -d "{\"type\":\"magiclink\",\"token_hash\":\"$HASH\"}" > "$RUNNER_TEMP/uat-session.json"
+          python3 - "$RUNNER_TEMP/uat-session.json" "$OWNER_ID" <<'PY'
+          import json, sys, time
+          p, owner = sys.argv[1], sys.argv[2]
+          s = json.load(open(p))
+          for k in ("access_token", "refresh_token"):
+              if s.get(k): print(f"::add-mask::{s[k]}")
+          if not s.get("access_token"):
+              print("::error::verify returned no session; keys=" + str(list(s.keys()))); sys.exit(1)
+          s.setdefault("expires_at", int(time.time()) + int(s.get("expires_in", 3600)))
+          uid = (s.get("user") or {}).get("id")
+          print("session minted for user", "OWNER" if uid == owner else "MISMATCH " + str(uid))
+          if uid != owner: sys.exit(1)
+          json.dump(s, open(p, "w"))
+          PY
+          echo "UAT_SESSION_FILE=$RUNNER_TEMP/uat-session.json" >> "$GITHUB_ENV"
+
+      - name: Install Playwright + Chromium
+        run: |
+          # Installed beside the runner, NOT at the repo root: a root install would pull the whole app tree.
+          cd scripts/uat && npm init -y >/dev/null && npm install --no-package-lock playwright@1.64.1   # pinned like Huddle's (1.65.0 ETARGET, 2026-11-05)
+          npx playwright install chromium --with-deps
+
+      - name: Run UAT
+        env:
+          APP_URL: ${{ inputs.app_url || 'https://journey-voice.lovable.app' }}
+          CHECKS_FILE: ${{ github.workspace }}/${{ inputs.checks_file || 'scripts/uat/settings-coursework-checks.mjs' }}
+          SHOT_DIR: uat-shots
+          UAT_VIEWPORT_W: ${{ inputs.viewport_w || '1440' }}
+          UAT_VIEWPORT_H: ${{ inputs.viewport_h || '900' }}
+        run: node scripts/uat/run-uat.mjs
+
+      - name: Upload screenshots + results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uat-shots
+          path: uat-shots/
+          retention-days: 7
+
+      # CCR sessions cannot download artifact zips (proxy blocks the blob redirect); publish to an
+      # orphan branch the session reaches over git. Run id stamped in the commit for provenance.
+      - name: Publish shots to uat-shots branch
+        if: always()
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "gha-uat"
+          git checkout --orphan uat-shots
+          git reset >/dev/null 2>&1 || true
+          shopt -s nullglob
+          shots=(uat-shots/*.png)
+          if [ ${#shots[@]} -eq 0 ]; then
+            echo "::warning::this run produced NO screenshots -- leaving uat-shots untouched."
+            exit 0
+          fi
+          git add -f uat-shots/*.png uat-shots/results.json 2>/dev/null || git add -f uat-shots/*.png
+          git commit -q -m "uat shots — run ${{ github.run_id }}" || { echo "no shots to commit"; exit 0; }
+          git push -f origin uat-shots
