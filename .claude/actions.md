@@ -678,3 +678,11 @@ client work + own apps = VENTURES; Esri / Power BI / SDLC / ops decks = JOB; no 
 
 | 13 | Owner 2026-11-05: control in Settings which accounts the nightly schedule runs for; demo labelled, madison off | **merged + deployed + verified live** (madison skipped, demo ran) | deventerprisesds/journey-voice#96 (c64e4b2) |
 | 14 | Owner 2026-11-05: von.ellis@ and dev@ "must be linked" | **OPEN — decision**: linked in `user_email_aliases` (Huddle) but NOT in journey's Supabase Auth (separate account 4132de9e) | memory.md "two account-linking systems" |
+
+## ACT:trinnex-onedrive-taskos — work-calendar meetings in TaskOS from the EDS OneDrive snapshot (2026-11-08)
+- **Asked for:** owner 2026-11-08 "For task os both A and B" (A: work meetings in TaskOS calendar/planning; B: work email + meetings in TaskOS daily messages) and "TaskOS should be enabled to read OneDrive" (TaskOS reads the file itself, not via Huddle).
+- **Approach (A):** delegated Files.Read on the EXISTING EDS Outlook sign-in (calendar-token-manager scope); calendar-delta-sync mints a never-stored Files.Read token from the refresh token and writes feed rows into external_calendar_events on that connection (calendar_id `onedrive-feed`, ids `feed:<mailbox>:<id>`). OFF unless edge secret `TASKOS_ONEDRIVE_FEED` binds it. Orphan sweep skips feed rows; calendar-edit refuses them (read-only).
+- **Status:** PR https://github.com/deventerprisesds/journey-voice/pull/102 (branch claude_trinnex-onedrive-taskos, 51db4312). NOT merged. Evidence: onedrive-feed.test.ts 13/13, calendar-edit 16/16, npm test 669/669, check:symbols 0 new, 4 mutations FIRED (D1 account match, D3 stale filter, D4 rejected-changes-nothing, FEED read-only).
+- **Live binding (observed 2026-11-08):** calendar_connections bb04653a (office365, von.ellis@enterpriseds.io, active, READ+WRITE) is the connection the feed binds to.
+- **Owner steps after merge:** set TASKOS_ONEDRIVE_FEED; re-sign in to the EDS Outlook account in TaskOS (adds Files.Read; until then the feed reports needs_reconnect and writes nothing).
+- **Not done:** B (work EMAIL in TaskOS daily digests) -- meetings already reach digests via external_calendar_events once A is live.

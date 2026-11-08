@@ -184,7 +184,7 @@ async function getOAuthUrl(provider: string, redirectUri: string) {
       // Graph key cannot reach. Requested HERE so an external tenant's one admin-consent request
       // covers mail and calendar together. Mail.Send deliberately omitted (least privilege: drafts
       // are sent by the owner from Outlook), which also makes the employer's approval easier.
-      scope: 'Calendars.ReadWrite Mail.ReadWrite User.Read offline_access', state: 'outlook'
+      scope: 'Calendars.ReadWrite Mail.ReadWrite Files.Read User.Read offline_access', state: 'outlook'
     });
     return { auth_url: `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${params.toString()}` };
   } else {

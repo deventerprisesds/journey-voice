@@ -1,6 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { normalizeAttendees, normalizeShowAs } from '../_shared/meetings.ts';
+import { syncFeedCalendar } from '../_shared/onedrive-feed-sync.ts';
+import { isFeedEventId } from '../_shared/onedrive-feed.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -34,7 +36,7 @@ serve(async (req) => {
     // Get all active READ-purpose connections (or specific one if connection_id provided)
     let query = supabaseClient
       .from('calendar_connections')
-      .select('id, user_id, provider, sync_token, purposes, expires_at, access_token, refresh_token, metadata')
+      .select('id, user_id, provider, provider_account_email, sync_token, purposes, expires_at, access_token, refresh_token, metadata')
       .eq('is_active', true)
       .contains('purposes', ['READ']);
 
@@ -116,6 +118,17 @@ serve(async (req) => {
 
         if (connection.provider === 'outlook' || connection.provider === 'office365') {
           result = await syncOutlookDelta(supabaseClient, connection, tokens);
+          // Work-calendar feed (OneDrive snapshot) rides the SAME EDS sign-in. Off unless the
+          // TASKOS_ONEDRIVE_FEED secret names this account; never fails the Outlook sync.
+          try {
+            const feed = await syncFeedCalendar(supabaseClient, connection, tokens.refresh_token);
+            if (feed.status !== 'off' && feed.status !== 'not_this_account') {
+              (result as DeltaSyncResult & { feed?: unknown }).feed = feed;
+              console.log('[calendar-delta-sync] work-calendar feed', feed);
+            }
+          } catch (feedErr) {
+            console.warn('[calendar-delta-sync] work-calendar feed failed', feedErr instanceof Error ? feedErr.message : feedErr);
+          }
         } else if (connection.provider === 'google') {
           result = await syncGoogleDelta(supabaseClient, connection, tokens);
         } else {
@@ -357,7 +370,7 @@ async function syncOutlookDelta(
       
       if (existingEvents) {
         const orphanIds = existingEvents
-          .filter(e => !fetchedIds.includes(e.external_event_id))
+          .filter(e => !isFeedEventId(e.external_event_id) && !fetchedIds.includes(e.external_event_id))
           .map(e => e.id);
         
         if (orphanIds.length > 0) {
@@ -568,7 +581,7 @@ async function syncGoogleDelta(
       
       if (existingEvents) {
         const orphanIds = existingEvents
-          .filter(e => !fetchedIds.includes(e.external_event_id))
+          .filter(e => !isFeedEventId(e.external_event_id) && !fetchedIds.includes(e.external_event_id))
           .map(e => e.id);
         
         if (orphanIds.length > 0) {
