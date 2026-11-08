@@ -83,7 +83,7 @@ export function buildCategoryGuide(opts: {
   lines.push('2. Otherwise, SDLC / software-delivery-process work, ops decks and ops process diagrams are JOB by default.');
   lines.push('3. Employer signals (my manager, my team, standup, onboarding, timesheet, benefits, compliance training, the employer\'s tools, colleagues or clients) mean JOB.');
   lines.push('4. Getting the next role (applying, interviewing, recruiters, LinkedIn, résumé/CV, career coach) is CAREER -- even if a company or tool is named, e.g. an interview with a recruiter from a tool vendor is CAREER.');
-  lines.push('4b. Updating LinkedIn or a résumé to reflect the CURRENT job (adding the new role, its job history, certificates earned for it) is JOB (owner ruling 2026-11-08); LinkedIn work aimed at the next role stays CAREER.');
+  lines.push('4b. Adding the CURRENT job to LinkedIn or a résumé (the new role\'s job-history entry, certificates earned for it) is JOB (owner ruling 2026-11-08). Any other LinkedIn work (headline, profile, posts, networking) stays CAREER.');
   lines.push('5. Generic work with no owner signal at all ("prepare slides for the client meeting", "finish the quarterly deck") is JOB.');
   lines.push('6. Learning a tool on a self-paced course is EDUCATION; a formal degree program\'s work is PROF_EDUCATION.');
   return lines.join('\n');
@@ -107,7 +107,7 @@ export function buildRequestContextBlock(context: unknown): string {
     "THE USER'S OWN MESSAGE THAT REQUESTED THESE TASKS (context only -- never create a task from it):",
     `"""${text}"""`,
     'Use it to decide category. A framing it states explicitly (e.g. "for work", "my work priorities today", "these are all job tasks") applies to EVERY task in this input unless a line clearly says otherwise (a personal errand, family, health, a class).',
-    'An explicit work framing means JOB for every such line: it outranks the name hints and the default rules above, because the user has said what these tasks are for.',
+    'An explicit work framing means JOB for every such line -- even one that names one of the owner\'s own products (rule 1) or matches a name hint: the user has said what these tasks are for.',
     'Wording that only means DOING something ("things I need to work on", "priorities for today") is NOT a work framing (owner ruling 2026-11-08): decide those lines one by one as usual.',
   ].join('\n');
 }

@@ -35,7 +35,7 @@ describe('request context -> category prompt (fix step 1)', () => {
     const b = buildRequestContextBlock(PREFACE);
     assert.ok(b.includes(`"""${PREFACE}"""`), b);
     assert.match(b, /applies to EVERY task in this input unless a line clearly says otherwise/);
-    assert.match(b, /explicit work framing means JOB for every such line/);
+    assert.match(b, /explicit work framing means JOB for every such line -- even one that names one of the owner's own products/);
     assert.match(b, /"things I need to work on".* is NOT a work framing/);
     assert.match(b, /never create a task from it/);
     assert.match(b, /decide category/);

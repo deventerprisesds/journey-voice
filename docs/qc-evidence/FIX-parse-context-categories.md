@@ -52,7 +52,7 @@ Branch `claude_parse-context-categories` from origin/main 3c5aee4.
 | repeats missed (created again, < 0.80) | 2 ("Sign up for Aha!" 0.775; "Walk backwards from 30/60/90 to weekly tasks" 0.722) |
 | **call-1 item skipped against an OLDER open task: REVIEW** | 1: "Sign up for an Esri developer account" ~ existing "Sign up for Esri developer account" (signature). It already existed, so this reads as a true catch; it would not have been created. |
 
-INFERRED (high): on 11-07 with dedup ON and the priority guard in place, the board would have had 23 + 12 flagged + 2 = ~37 new rows minus the Esri skip, instead of 43 (or 60 with the guard alone). Dedup cuts the repeats by about two thirds; it does not stop the re-run loop (that is Huddle #164's job).
+INFERRED (high): on 11-07 with dedup ON and the priority guard in place, the board would have had 22 originals (Esri skipped) + 12 flagged + 2 missed = 36 new rows, instead of 43 (or 60 with the guard alone). Dedup cuts the repeats by about two thirds; it does not stop the re-run loop (that is Huddle #164's job).
 
 ## Progress
 - [x] 1 context arg
