@@ -76,6 +76,26 @@ jobs:
           supabase secrets set JOURNEY_PROXY_TOKEN="$JOURNEY_PROXY_TOKEN" --project-ref wwxgajrtmslzklnyplah --yes
           echo "Synced JOURNEY_PROXY_TOKEN to Supabase edge secrets"
 
+      - name: Sync the work-calendar feed key and config from GitHub
+        # TaskOS reads the owner's OneDrive calendar snapshot with the SAME app-only Graph key Huddle
+        # uses (owner, 2026-11-08: "graph unlocks it all with the existing key"). journey-voice sits under
+        # a personal account, so the Huddle org's AZURE_* secrets cannot reach it: the same three values
+        # are repo secrets here. TASKOS_ONEDRIVE_FEED binds the feed to the account (private: work
+        # mailbox). Each is copied only when set; values are never printed. Absent = feed stays OFF.
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          TASKOS_ONEDRIVE_FEED: ${{ secrets.TASKOS_ONEDRIVE_FEED }}
+        run: |
+          args=()
+          for n in AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET TASKOS_ONEDRIVE_FEED; do
+            if [ -n "${!n}" ]; then args+=("$n=${!n}"); echo "$n: present"; else echo "$n: not set (skipped)"; fi
+          done
+          if [ ${#args[@]} -eq 0 ]; then echo "No feed secrets set -- work-calendar feed stays OFF."; exit 0; fi
+          supabase secrets set "${args[@]}" --project-ref wwxgajrtmslzklnyplah --yes >/dev/null
+          echo "Synced ${#args[@]} work-calendar feed secret(s) to Supabase edge secrets"
+
       - name: Determine functions to deploy
         id: changed
         run: |

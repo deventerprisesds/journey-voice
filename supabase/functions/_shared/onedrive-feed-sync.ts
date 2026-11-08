@@ -1,14 +1,18 @@
 // WHAT:       I/O half of TaskOS's work-calendar feed: reads the owner's appointments snapshot from his EDS
-//             OneDrive with the SAME delegated sign-in TaskOS already holds for that Outlook account, and
-//             writes the work meetings into external_calendar_events (owned by that connection).
-// WHY:        see onedrive-feed.ts. Owner, 2026-11-08: "TaskOS should be enabled to read OneDrive".
-// SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+//             OneDrive with the SAME app-only Microsoft Graph key Huddle uses (client credentials), and
+//             writes the work meetings into external_calendar_events (owned by the EDS Outlook connection).
+// WHY:        see onedrive-feed.ts. Owner, 2026-11-08: "TaskOS should be enabled to read OneDrive" and
+//             "graph unlocks it all with the existing key". An app key does not depend on anyone's sign-in,
+//             so it cannot lapse on a password change, sign-out, revocation or 90 idle days.
+// SUPERSEDES: the delegated-sign-in version of this file (#102: Files.Read minted from the owner's refresh
+//             token). That depended on a personal sign-in staying valid and needed a re-consent.
+// SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   supabase/functions/_shared/onedrive-feed.test.ts; calendar-delta-sync calls this.
 //
-// The file-read token is minted from the stored refresh token with scope Files.Read and NEVER stored:
-// the connection's stored access token is the calendar one calendar sync uses. Files.Read must have been
-// granted at sign-in (calendar-token-manager asks for it); until the owner re-signs in, Microsoft answers
-// AADSTS65001 and this reports `needs_reconnect` and changes nothing.
+// Key: AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET edge secrets -- the same values as
+// Huddle's, synced from journey-voice repo secrets by deploy-supabase-functions.yml. Missing -> `needs_key`
+// and nothing changes. The connection is only the OWNER ANCHOR for the rows (connection_id is NOT NULL);
+// its tokens are not used.
 
 import {
   FEED_CALENDAR_ID,
@@ -24,7 +28,7 @@ type Client = any;
 const READ_DEADLINE_MS = 10_000;
 
 export interface FeedSyncResult {
-  status: "off" | "not_this_account" | "needs_reconnect" | "error" | `rejected:${string}` | "ok";
+  status: "off" | "not_this_account" | "needs_key" | "error" | `rejected:${string}` | "ok";
   upserted?: number;
   removed?: number;
   skipped?: number;
@@ -33,7 +37,6 @@ export interface FeedSyncResult {
 export async function syncFeedCalendar(
   supabase: Client,
   connection: { id: string; user_id: string; provider: string; provider_account_email?: string | null },
-  refreshToken: string | null | undefined,
   fetchImpl: typeof fetch = fetch,
   nowMs: number = Date.now(),
 ): Promise<FeedSyncResult> {
@@ -43,33 +46,33 @@ export async function syncFeedCalendar(
   if (String(connection.provider_account_email ?? "").trim().toLowerCase() !== cfg.driveAccount) {
     return { status: "not_this_account" };
   }
-  if (!refreshToken) return { status: "needs_reconnect" };
-  const clientId = Deno.env.get("MICROSOFT_CLIENT_ID");
-  const clientSecret = Deno.env.get("MICROSOFT_CLIENT_SECRET");
-  if (!clientId || !clientSecret) return { status: "error" };
+  const tenant = Deno.env.get("AZURE_TENANT_ID");
+  const clientId = Deno.env.get("AZURE_CLIENT_ID");
+  const clientSecret = Deno.env.get("AZURE_CLIENT_SECRET");
+  if (!tenant || !clientId || !clientSecret) return { status: "needs_key" };
   const signal = AbortSignal.timeout(READ_DEADLINE_MS);
   try {
-    const tok = await fetchImpl("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
+    const tok = await fetchImpl(`https://login.microsoftonline.com/${encodeURIComponent(tenant)}/oauth2/v2.0/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         client_id: clientId,
         client_secret: clientSecret,
-        refresh_token: refreshToken,
-        grant_type: "refresh_token",
-        scope: "https://graph.microsoft.com/Files.Read offline_access",
+        grant_type: "client_credentials",
+        scope: "https://graph.microsoft.com/.default",
       }),
       signal,
     });
     if (!tok.ok) {
       const body = await tok.text();
-      console.warn("[onedrive-feed] file token refused", tok.status, /AADSTS\d+/.exec(body)?.[0] ?? "");
-      return { status: /AADSTS65001|invalid_grant|consent/i.test(body) ? "needs_reconnect" : "error" };
+      console.warn("[onedrive-feed] app token refused", tok.status, /AADSTS\d+/.exec(body)?.[0] ?? "");
+      return { status: "error" };
     }
     const accessToken = (await tok.json())?.access_token;
     if (!accessToken) return { status: "error" };
     const path = cfg.appointmentsPath.split("/").map((s) => encodeURIComponent(s)).join("/");
-    const res = await fetchImpl(`https://graph.microsoft.com/v1.0/me/drive/root:${path}:/content`, {
+    const user = encodeURIComponent(cfg.driveAccount);
+    const res = await fetchImpl(`https://graph.microsoft.com/v1.0/users/${user}/drive/root:${path}:/content`, {
       headers: { Authorization: `Bearer ${accessToken}` },
       signal,
     });
