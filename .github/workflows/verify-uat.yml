@@ -14,11 +14,7 @@
 name: Verify UAT (live journey web app, real browser)
 
 on:
-  # workflow_dispatch 404s until this file is on the default branch (measured 2026-11-08), so this
-  # branch-scoped push trigger is how the first runs happen. REMOVE IT BEFORE MERGING.
-  push:
-    branches: [claude_journey-verify-uat]
-    paths: ['.github/workflows/verify-uat.yml', 'scripts/uat/**']
+  # Dispatch-only. The first runs (42487226041, 42488092644) used a temporary branch push trigger, removed before merge.
   workflow_dispatch:
     inputs:
       checks_file:
