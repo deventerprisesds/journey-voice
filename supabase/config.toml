@@ -173,3 +173,6 @@ verify_jwt = false
 
 [functions.test-outlook-calendar]
 verify_jwt = false
+
+[functions.app-downloads]
+verify_jwt = true

@@ -1,0 +1,49 @@
+# WHAT:       Copies JOURNEY_PROXY_TOKEN into the bridge-builder Function App's settings, then smoke-tests
+#             bridge-builder's getLatestApk with it (status + versions only; links are never printed).
+# WHY:        The Settings "Download" tab (edge fn app-downloads) asks bridge-builder for fresh APK links,
+#             authenticated by this shared token. bridge-builder's own Actions hold only a publish profile;
+#             this repo holds the token AND an Azure principal that can see bridge-builder-api (probe run
+#             42807531417). Writes only when the value differs -- every settings write restarts the Function.
+# SUPERSEDES: nothing. SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   deventerprisesds/bridge-builder#2.
+name: sync-bridge-builder-token
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/sync-bridge-builder-token.yml']
+permissions:
+  contents: read
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      RG: EnterpriseDS_ResourceGRP
+      FN: bridge-builder-api
+    steps:
+      - name: Azure login
+        env:
+          C: ${{ secrets.AZURE_CLIENT_ID }}
+          S: ${{ secrets.AZURE_CLIENT_SECRET }}
+          T: ${{ secrets.AZURE_TENANT_ID }}
+        run: az login --service-principal -u "$C" -p "$S" --tenant "$T" -o none
+      - name: Set JOURNEY_PROXY_TOKEN if it differs
+        env:
+          TOKEN: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+        run: |
+          [ -n "$TOKEN" ] || { echo "::error::JOURNEY_PROXY_TOKEN is empty in this repo"; exit 1; }
+          cur=$(az functionapp config appsettings list -g "$RG" -n "$FN" --query "[?name=='JOURNEY_PROXY_TOKEN'].value | [0]" -o tsv)
+          if [ "$cur" = "$TOKEN" ]; then echo "unchanged"; else
+            az functionapp config appsettings set -g "$RG" -n "$FN" --settings "JOURNEY_PROXY_TOKEN=$TOKEN" -o none
+            echo "written (Function restarts)"; fi
+      - name: Smoke test getLatestApk
+        env:
+          TOKEN: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+        run: |
+          host=$(az functionapp show -g "$RG" -n "$FN" --query defaultHostName -o tsv); echo "host=$host"
+          ids=54beaa01-7564-417f-a6cc-bd9190c14dcb,8596e6c2-05d5-45c2-9d32-18e03be31471
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -s -o /tmp/r.json -w '%{http_code}' -H "x-journey-proxy-token: $TOKEN" "https://$host/api/getLatestApk?appId=$ids")
+            echo "attempt $i: HTTP $code"; [ "$code" = 200 ] && break; sleep 20; done
+          jq -c '[.apps[]? | {appId, found, version, builtAt}]' /tmp/r.json 2>/dev/null || true
+          noauth=$(curl -s -o /dev/null -w '%{http_code}' "https://$host/api/getLatestApk?appId=$ids"); echo "without token: HTTP $noauth"
