@@ -21,7 +21,8 @@ import {
   Sparkles,
   Home,
   ListChecks,
-  CalendarClock
+  CalendarClock,
+  Download
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -36,6 +37,7 @@ import VoiceAssistantSettings from '@/components/VoiceAssistantSettings';
 import ProfileSettings from '@/components/ProfileSettings';
 import { AssignmentSyncSettings } from '@/components/AssignmentSyncSettings';
 import TaskCleanupSettings from '@/components/TaskCleanupSettings';
+import AppDownloadsSettings from '@/components/AppDownloadsSettings';
 import { useOAuthCallback } from '@/hooks/useOAuthCallback';
 
 const tabConfig = [
@@ -50,6 +52,7 @@ const tabConfig = [
   { value: 'profile', label: 'Profile', icon: User },
   { value: 'appearance', label: 'Appearance', icon: Palette },
   { value: 'privacy', label: 'Privacy', icon: Shield },
+  { value: 'download', label: 'Download', icon: Download },
 ];
 
 const Settings: React.FC = () => {
@@ -185,6 +188,10 @@ const Settings: React.FC = () => {
 
           <TabsContent value="profile" className="mt-6">
             <ProfileSettings />
+          </TabsContent>
+
+          <TabsContent value="download" className="mt-6">
+            <AppDownloadsSettings />
           </TabsContent>
 
           <TabsContent value="appearance" className="mt-6">
