@@ -13,6 +13,12 @@ Last updated: 2026-11-05
 > the same reason: its ACT entries each carry their own date.
 
 
+
+## Settings "Download" tab — how APK links are served (2026-11-10, LIVE; owner NOT yet confirmed in the app)
+- TaskOS (`src/components/AppDownloadsSettings.tsx`) -> edge fn `app-downloads` -> bridge-builder `GET /api/getLatestApk?appId=..`; Huddle's server fn calls the same endpoint. Auth = `JOURNEY_PROXY_TOKEN` in `x-journey-proxy-token` (no new secret).
+- The token reaches the bridge-builder Function via THIS repo's `sync-bridge-builder-token.yml` (journey's Azure principal can write `bridge-builder-api` settings; bridge-builder's own Actions cannot). **Rotating `JOURNEY_PROXY_TOKEN` => re-dispatch that workflow**, or both Download tabs return `bridge_401`.
+- `bridge-apks` blob container is PRIVATE (unsigned URL = 409); links in bridge.config.json expire 30 days after each build. The CCR proxy blocks `*.blob.core.windows.net` and `*.supabase.co` — check from a runner.
+- Installed version comes from `AndroidBridge.getCapabilities().version` (no Android change needed).
 ## Phone push "sent but not shown" — read the phone's own report (2026-11-08)
 - `send-push-notification` logging "FCM sent … success" only proves Google accepted the push. Whether the phone SHOWED it is reported by the app: activity_log rows with activity_type `android_alarm_trace`, messages `FCM_RX`, `FCM_FIRE`, and (from Huddle v1.0.17 / android-bridge-template #29) `NOTIF_DIAG … verdict=<SHOWN|APP_NOTIFICATIONS_OFF|CHANNEL_OFF|CHANNEL_MISSING|POSTED_BUT_NOT_IN_SHADE|NOT_POSTED_BY_APP>`.
 - Pushes with no task now carry a TRACE-ONLY token (journey-voice #108); `verifyActionToken` refuses it unless `allowTraceOnly` — never pass that flag outside alarm-action's trace op.
