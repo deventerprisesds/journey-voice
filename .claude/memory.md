@@ -1,5 +1,5 @@
 # Project Memory — journey-voice
-Last updated: 2026-11-05
+Last updated: 2026-11-12
 
 > **MOVE THE DATE ABOVE IN THE SAME COMMIT THAT APPENDS A SECTION.** It read `2026-09-21` while
 > this file already carried sections dated 2026-10-08 and 2026-10-12 — three weeks of the header
@@ -13,6 +13,23 @@ Last updated: 2026-11-05
 > the same reason: its ACT entries each carry their own date.
 
 
+
+
+## Week builds cut off at 150s; coursework never reaches Nexus (2026-11-12, #115 merged + deployed)
+- **Cut-off:** the gateway ends a WAITING request at 150s. The owner's 7-day build took longer on 11-11 and
+  11-12 (edge log `POST 504` at 05:02:33): days 5-7 unbuilt, top-up skipped, no `nightly_schedule_built` row.
+  #115: week runs answer 202 and finish under `EdgeRuntime.waitUntil` (`_shared/builder-background.ts`).
+  Single-day runs unchanged. Live: 202 in 3ms (request 985262).
+  Deploy attempt 1 failed at `supabase/setup-cli@v1 version: latest` -- "rate limit exceeded" resolving the
+  CLI version; the re-run passed.
+- **"Empty morning" 11-12:** NOT a builder gap. 8-10 held "Create two Trinnex images"; the owner tapped Done
+  on its phone alarm at 07:45 (activity_log `android_alarm_action`). Nothing refills a slot freed early.
+- **Missing assignments:** Nexus holds only what the browser extension captures while the owner browses
+  Canvas (`extension/manifest.json`: "as you browse, for when the LMS API isn't available"). No Canvas
+  timer exists. Last real capture 2026-10-27, so nothing due 11-09..15 except Checkpoint 2. The sync is
+  fine (569 rows read nightly). Decision pending: Canvas calendar feed + "no coursework captured" warning.
+- Leftover `Test-Checkpoint 2 (UAT …)` rows from another session's tests: 4 on the journey board, 3 in Nexus.
+  Delete blocked by an unanswered tool approval; awaiting owner yes.
 
 ## Settings "Download" tab — how APK links are served (2026-11-10, LIVE; owner NOT yet confirmed in the app)
 - TaskOS (`src/components/AppDownloadsSettings.tsx`) -> edge fn `app-downloads` -> bridge-builder `GET /api/getLatestApk?appId=..`; Huddle's server fn calls the same endpoint. Auth = `JOURNEY_PROXY_TOKEN` in `x-journey-proxy-token` (no new secret).
