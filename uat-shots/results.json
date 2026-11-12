@@ -1,0 +1,65 @@
+{
+  "results": [
+    {
+      "name": "C0 live bundle contains the Download tab ('Latest Android builds')",
+      "pass": false,
+      "detail": "NOT in any of 1 JS files served by https://journey-voice.lovable.app -- #110 is likely not published by Lovable yet"
+    },
+    {
+      "name": "C1 signed in as owner -> /settings renders",
+      "pass": true,
+      "detail": "landed on /settings"
+    },
+    {
+      "name": "C2 Settings has a tab labelled 'Download'",
+      "pass": false,
+      "detail": "matches: 0"
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": false,
+      "detail": "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log"
+    }
+  ],
+  "failedRequests": [
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log"
+  ]
+}
