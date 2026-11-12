@@ -117,3 +117,22 @@ export function isTaskBackedEvent(
   return !!event.source_task_id ||
     (!!event.external_event_id && taskBackedEventIds.has(event.external_event_id));
 }
+
+/**
+ * Calendar reminders: how far ahead each scheduler run looks for meetings.
+ *
+ * The scheduler runs ONCE AN HOUR (cron job `notification-scheduler-job`, schedule '0 * * * *'). The old
+ * window was lead + 5 minutes, strictly after "now": a run at 10:00 saw only 10:00:01-10:20, so a meeting
+ * at 10:30 was never in view and an 11:00 meeting was "now", not after it, by the next run. Measured
+ * 2026-11-12: 23 meetings in 7 days, every one at :00 or :30, and 0 calendar_event_reminder rows ever.
+ * Each run must therefore see every meeting whose reminder falls before the NEXT run: lead + one run
+ * interval + slack. The reminder itself is still scheduled for start - lead (delivery runs every minute),
+ * and the existing per-event duplicate check keeps it to one per meeting.
+ * COUPLED: if the cron schedule changes, change SCHEDULER_RUN_INTERVAL_MINUTES.
+ */
+export const SCHEDULER_RUN_INTERVAL_MINUTES = 60;
+export const CALENDAR_LOOKAHEAD_SLACK_MINUTES = 5;
+
+export function calendarReminderWindowEnd(now: Date, leadMinutes: number): Date {
+  return new Date(now.getTime() + (leadMinutes + SCHEDULER_RUN_INTERVAL_MINUTES + CALENDAR_LOOKAHEAD_SLACK_MINUTES) * 60_000);
+}
