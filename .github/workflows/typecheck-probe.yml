@@ -1,0 +1,21 @@
+# WHAT: throwaway -- typechecks and builds the web app on this branch only (CCR proxy blocks the local npm/bun install).
+# WHY:  journey CI has no web build step; PR #110 adds a React tab. SUPERSEDES/SUPERSEDED-BY: nothing; delete branch after.
+# EVIDENCE: this run's log.
+name: typecheck-probe
+on:
+  push:
+    branches: [claude_download-tab-typecheck]
+jobs:
+  tc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci --no-audit --no-fund
+      - name: typecheck (new files)
+        run: |
+          npx tsc --noEmit -p tsconfig.app.json > tsc.txt 2>&1 || true
+          echo "total TS errors: $(grep -c 'error TS' tsc.txt)"
+          grep -E "AppDownloads|pages/Settings" tsc.txt && exit 1 || echo "no errors in AppDownloadsSettings.tsx / Settings.tsx"
+      - run: set -o pipefail; npx vite build 2>&1 | tail -5
