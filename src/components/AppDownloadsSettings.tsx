@@ -48,6 +48,8 @@ const REASONS: Record<string, string> = {
   sign_in_required: 'Sign in to see download links.',
   not_configured: 'The download service is not set up yet.',
   bridge_unreachable: 'The build server did not answer. Try again in a minute.',
+  bridge_401: 'The build server rejected this app\'s key. It needs re-syncing.',
+  bridge_503: 'The build server is not set up yet.',
 };
 
 export default function AppDownloadsSettings() {
@@ -61,7 +63,11 @@ export default function AppDownloadsSettings() {
     setError(null);
     const { data, error: err } = await supabase.functions.invoke('app-downloads', { method: 'GET' });
     if (err || !data?.ok) {
-      const reason = data?.reason as string | undefined;
+      // A non-2xx reply arrives as err with data null; the function's {reason} is on err.context (the Response).
+      let reason = data?.reason as string | undefined;
+      if (!reason && err) {
+        try { reason = (await (err as { context?: Response }).context?.json())?.reason; } catch { /* not JSON */ }
+      }
       setError((reason && REASONS[reason]) || 'Could not load the latest builds.');
       setRows(null);
     } else {
