@@ -12,6 +12,7 @@ import {
   overdueRemindersAllowed,
   generateOverdueReminders,
   isTaskBackedEvent,
+  calendarReminderWindowEnd,
 } from "./reminder-rules.ts";
 
 const corsHeaders = {
@@ -367,8 +368,8 @@ async function generateCalendarEventReminders(
   const notifications: any[] = [];
   const leadMinutes = prefs.calendar_reminder_minutes || 15;
   
-  // Look for events starting within the next (leadMinutes + 5) minutes
-  const windowEnd = new Date(now.getTime() + (leadMinutes + 5) * 60 * 1000);
+  // Every meeting whose reminder falls before the NEXT hourly run (see calendarReminderWindowEnd).
+  const windowEnd = calendarReminderWindowEnd(now, leadMinutes);
   
   const { data: events, error } = await supabaseClient
     .from('external_calendar_events')
