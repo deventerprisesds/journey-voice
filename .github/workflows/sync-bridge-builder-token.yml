@@ -47,3 +47,5 @@ jobs:
             echo "attempt $i: HTTP $code"; [ "$code" = 200 ] && break; sleep 20; done
           jq -c '[.apps[]? | {appId, found, version, builtAt}]' /tmp/r.json 2>/dev/null || true
           noauth=$(curl -s -o /dev/null -w '%{http_code}' "https://$host/api/getLatestApk?appId=$ids"); echo "without token: HTTP $noauth"
+          [ "$code" = 200 ] || { echo "::error::getLatestApk with the token never returned 200 (last: $code)"; exit 1; }
+          [ "$noauth" = 401 ] || { echo "::error::getLatestApk without the token returned $noauth, expected 401"; exit 1; }
