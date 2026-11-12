@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { resolveConflictRules, conflictWeightOf } from "../_shared/conflict-rules.ts";
 import { nightlySetting, skipNightlyRun } from '../_shared/nightly-switch.ts';
+import { runsInBackground } from '../_shared/builder-background.ts';
 import { pendingIdsForDay } from "../_shared/per-day-rebuild.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
@@ -220,11 +221,31 @@ function getKeywordWindowOverride(
   return m ? { window: m.window, matchedKeyword: m.keyword } : null;
 }
 
+// A 7-day run takes 66-196s and the gateway cuts a waiting request at 150s (504 on 2026-11-11/12), so
+// week runs answer 202 at once and keep building in the background. See _shared/builder-background.ts.
+declare const EdgeRuntime: any;
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
+  const raw = await req.text();
+  let parsed: unknown = {};
+  try { parsed = raw ? JSON.parse(raw) : {}; } catch { /* no body = full run */ }
+  const replay = () => new Request(req.url, { method: req.method, headers: req.headers, body: raw || undefined });
+  if (runsInBackground(parsed)) {
+    const work = buildSchedules(replay())
+      .then((r) => console.log(`🌙 Background build finished (HTTP ${r.status})`))
+      .catch((e) => console.error('❌ Background build failed:', e));
+    try { EdgeRuntime.waitUntil(work); } catch (_) { /* local dev: the promise still runs */ }
+    return new Response(JSON.stringify({ accepted: true, background: true }), {
+      status: 202,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+  return buildSchedules(replay());
+});
 
+async function buildSchedules(req: Request): Promise<Response> {
   const startTime = Date.now();
 
   try {
@@ -1899,4 +1920,4 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
-});
+}
