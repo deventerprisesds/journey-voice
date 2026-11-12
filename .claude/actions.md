@@ -6,6 +6,18 @@ the technical findings) and `.claude/accuracy-log.md` (wrong-first-answers).
 
 ---
 
+## ACT:meeting-15min-reminder — no warning 15 minutes before a meeting (2026-11-12)
+Owner: *"my executive assistant agent is not letting me know that a meeting is about to start in 15 minutes"*.
+- [x] Root cause (live, owner account a3378f93): notification_prefs calendar reminders ON, 15 min, PUSH; 23 synced
+      meetings in 7 days, all at :00/:30; 0 calendar_event_reminder rows EVER. Scheduler is hourly ('0 * * * *') but
+      looked only lead+5 min ahead, strictly after now, so a :00 or :30 meeting could never be in a run's window.
+- [x] Fix on claude_calendar-reminder-window: window = lead + 60 + 5 (calendarReminderWindowEnd). reminder-rules
+      13/13 (day-replay guard + wiring guard, both FIRED); npm test 682/682.
+- [ ] Merge -> deploy notification-scheduler -> first reminder row appears before the next meeting.
+- [ ] Owner confirms the 15-minute warning reaches the phone. NOT owner-confirmed.
+- Note: this is journey's alarm (calendar_event_reminder is an alarm type), so it rings in the journey/TaskOS app,
+  not as a Huddle agent message. Huddle never built its own pre-meeting reminder (ACT:schedule-brief step 5).
+
 ## ACT:activities — recurring activities (lunch, gym, church, haircut, 1:1s) + "headed to the gym" push
 
 **Asked (2026-10-27/29, owner):** sub-windows inside the time windows for repeatable activities
