@@ -18,6 +18,7 @@ import {
   isInQuietHours,
   isTaskBackedEvent,
   overdueRemindersAllowed,
+  calendarReminderWindowEnd,
 } from './reminder-rules.ts';
 
 if (new Date(0).getTimezoneOffset() !== 0) {
@@ -93,6 +94,31 @@ test('J13: an event that is a task mirror (either link side) is skipped; a real 
   assert.equal(isTaskBackedEvent({ source_task_id: null, external_event_id: null }, linked), false);
 });
 
+// Replays a day of the hourly scheduler (runs a few seconds past each hour, as live) against meetings at
+// :00, :15, :30 and :45, with the selection index.ts makes (start > now AND start <= windowEnd). Every
+// meeting must be picked up by a run made at or before its reminder time (start - lead), so the 15-minute
+// warning is on time. Live 2026-11-12: all 23 meetings that week were at :00/:30 and none was reminded.
+test('calendar reminders: every meeting is seen by a run at or before its reminder time', () => {
+  const lead = 15;
+  const runs: Date[] = [];
+  for (let h = 0; h < 30; h++) runs.push(new Date(Date.UTC(2026, 10, 11, h, 0, 6)));
+  const missed: string[] = [];
+  for (let h = 2; h < 24; h++) {
+    for (const m of [0, 15, 30, 45]) {
+      const start = new Date(Date.UTC(2026, 10, 11, h, m, 0));
+      const remindAt = start.getTime() - lead * 60_000;
+      const seen = runs.some((r) => r.getTime() <= remindAt && start > r && start <= calendarReminderWindowEnd(r, lead));
+      if (!seen) missed.push(start.toISOString().slice(11, 16));
+    }
+  }
+  assert.deepEqual(missed, []);
+});
+
+test('calendar reminders: the window is lead + one hourly run + 5 min slack', () => {
+  const now = new Date('2026-11-11T10:00:06Z');
+  assert.equal(calendarReminderWindowEnd(now, 15).toISOString(), '2026-11-11T11:20:06.000Z');
+});
+
 // index.ts calls serve() on import, so its wiring cannot be exercised; assert it statically instead.
 // Each line below is the call site whose removal would reinstate the old behaviour.
 test('index.ts wiring: the scheduler actually calls the gated, timezone-aware rules', () => {
@@ -100,6 +126,7 @@ test('index.ts wiring: the scheduler actually calls the gated, timezone-aware ru
   assert.match(src, /if \(overdueRemindersAllowed\(prefs, inQuietHours\)\) \{/);
   assert.match(src, /generateOverdueReminders\(tasks \|\| \[\], prefs\.user_id, now, prefs\.timezone\)/);
   assert.match(src, /if \(isTaskBackedEvent\(event, taskBackedEventIds\)\) \{\s*\n[^\n]*\n\s*continue;/);
+  assert.match(src, /const windowEnd = calendarReminderWindowEnd\(now, leadMinutes\);/);
   // (generateDueReminders, unused dead code from main, still reads now.getHours() === 9 -- untouched.)
   assert.doesNotMatch(src, /now\.getHours\(\) === 9 && now\.getMinutes\(\) < 15/);
 });
