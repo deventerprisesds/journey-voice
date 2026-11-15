@@ -1,3 +1,4 @@
+import { callSchedulerAI, type FetchLike } from '../_shared/scheduler-ai.ts';
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -54,8 +55,8 @@ serve(async (req) => {
     }
 
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-    if (!LOVABLE_API_KEY) {
-      throw new Error('LOVABLE_API_KEY not configured');
+    if (!LOVABLE_API_KEY && !Deno.env.get('OPENAI_API_KEY')) {
+      throw new Error('Neither LOVABLE_API_KEY nor OPENAI_API_KEY is configured');
     }
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
@@ -450,49 +451,27 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
     console.log('🤖 Calling AI for batch scheduling...');
     const aiStartTime = Date.now();
 
-    const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
-        messages: [
-          { role: 'user', content: batchPrompt }
-        ],
-      }),
-    });
-
-    if (!aiResponse.ok) {
-      const errorText = await aiResponse.text();
-      console.error('❌ AI API error:', aiResponse.status, errorText);
-      
-      if (aiResponse.status === 429) {
-        return new Response(JSON.stringify({ 
-          error: 'Rate limit exceeded. Please try again in a moment.',
-          scheduled: [] 
-        }), {
-          status: 429,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-      
-      if (aiResponse.status === 402) {
-        return new Response(JSON.stringify({ 
-          error: 'AI credits exhausted. Please add credits to continue.',
-          scheduled: [] 
-        }), {
-          status: 402,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-      
-      throw new Error(`AI API error: ${aiResponse.status}`);
+    // Lovable gateway first; OpenAI when the gateway refuses for credits/rate/outage. See _shared/scheduler-ai.ts.
+    const ai = await callSchedulerAI(
+      batchPrompt,
+      { lovable: LOVABLE_API_KEY, openai: Deno.env.get('OPENAI_API_KEY') },
+      fetch as unknown as FetchLike,
+    );
+    for (const a of ai.attempts) {
+      if (a.error) console.error(`❌ AI ${a.provider} error: ${a.status} ${a.error}`);
     }
-
-    const aiData = await aiResponse.json();
-    const aiContent = aiData.choices?.[0]?.message?.content;
+    if (!ai.ok) {
+      const status = ai.status === 429 || ai.status === 402 ? ai.status : 500;
+      return new Response(JSON.stringify({
+        error: `AI API error: ${ai.status}${ai.error ? ` ${ai.error.slice(0, 200)}` : ''}`,
+        scheduled: [],
+      }), {
+        status,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    if (ai.provider !== 'lovable') console.log(`🔁 Placement answered by ${ai.provider} (fallback)`);
+    const aiContent = ai.content;
     
     console.log(`✅ AI responded in ${Date.now() - aiStartTime}ms`);
 
