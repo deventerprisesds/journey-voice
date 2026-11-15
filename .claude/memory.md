@@ -1,5 +1,5 @@
 # Project Memory — journey-voice
-Last updated: 2026-11-12
+Last updated: 2026-11-15
 
 > **MOVE THE DATE ABOVE IN THE SAME COMMIT THAT APPENDS A SECTION.** It read `2026-09-21` while
 > this file already carried sections dated 2026-10-08 and 2026-10-12 — three weeks of the header
@@ -14,6 +14,25 @@ Last updated: 2026-11-12
 
 
 
+
+
+## Done tasks kept on the schedule; Research Paper under-sized; MGT-702 dropped (2026-11-15, #117 merged + deployed; owner NOT yet confirmed)
+- **#117 (e93bcd7, deploy run 43727767655 success):** STEP 1.25 took EVERY scheduled DONE task off the schedule
+  on each build. Midnight runs hid it; the 11-12 08:34 rebuild removed a task Done at 07:45 from 08:00-10:00.
+  Now only DONE tasks whose slot has NOT started are freed (`_shared/done-slot.ts`, DS-1..4, mutation-proved).
+  Owner rule: "it shouldn't be removed from the schedule because it was done ... views cross out, never disappear".
+  The owner's mistaken Done on "Create two Trinnex images" was reverted to UP_NEXT (owner said it was a mistake).
+- **Correction:** I told the owner on 11-12 the morning slot was "freed early and nothing refills it". Wrong --
+  the rebuild REMOVED the task (log 13:34:29 "Cleared scheduling from 1 completed tasks").
+- **Research Paper (MGT-782, due 12-09):** WAS scheduled -- session 1 on Sun 11-08 10:00, then Thu 11-12 19:00,
+  now Thu 11-19 19:00; session 2 planned 11-26. Defects: (1) default 180 min effort for every assignment =
+  2 x 90 min for a whole paper; (2) a missed session is re-spread evenly to finish-by (12-02), so it moves a
+  WEEK out, not to the next free evening. Decision pending (type-based effort + next-slot re-plan).
+- **MGT-702:** `currentCourseKeys` (assignment-intake.ts:116) counts a course only if it has an open dated
+  assignment today or later. Last dated MGT-702 item = Checkpoint 2 (11-08), so since 11-09 sync lists
+  only MGT-782. The class still meets Tue 19:00; Nexus has no future MGT-702 rows (never captured).
+- **11-13 build died after day 4** (shutdown ~05:04, about 4 min in); days 5-7 kept old placements. 11-14 and
+  11-15 completed. Risk remains for long runs.
 
 ## Week builds cut off at 150s; coursework never reaches Nexus (2026-11-12, #115 merged + deployed)
 - **Cut-off:** the gateway ends a WAITING request at 150s. The owner's 7-day build took longer on 11-11 and
