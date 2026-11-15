@@ -47,6 +47,12 @@ export interface SessionConfig {
   // type (no such limit). Anything that matches none is treated as a paper.
   onePaperPerDay: boolean;
   finiteTypeKeywords: string[];
+  /**
+   * Total effort by assignment type, matched on the title (owner 2026-11-15: approved "paper ~8h, checkpoint
+   * ~3h" and "discussions are usually 2 hours"). First match wins; used when the card's estimate is missing
+   * or is just the default. Editable in Settings (assignmentSessions.effortByType).
+   */
+  effortByType: Array<{ label: string; keywords: string[]; minutes: number }>;
 }
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = {
@@ -58,7 +64,24 @@ export const DEFAULT_SESSION_CONFIG: SessionConfig = {
   todayLeadMinutes: 15,
   onePaperPerDay: true,
   finiteTypeKeywords: ['reading', 'readings', 'read', 'chapter', 'chapters', 'powerpoint', 'slides', 'slide deck', 'presentation', 'ppt'],
+  effortByType: [
+    { label: 'Discussion', keywords: ['discussion', 'forum', 'post', 'reply', 'response'], minutes: 120 },
+    { label: 'Checkpoint', keywords: ['checkpoint', 'proposal', 'outline', 'draft'], minutes: 180 },
+    { label: 'Paper', keywords: ['paper', 'essay', 'thesis', 'report', 'dissertation', 'literature review'], minutes: 480 },
+  ],
 };
+
+/** Effort for a title from the type table, or null when no type matches. Whole-word, case-insensitive. */
+export function effortForTitle(title: unknown, types: SessionConfig['effortByType']): number | null {
+  const t = String(title ?? '').toLowerCase();
+  for (const ty of types) {
+    for (const k of ty.keywords) {
+      const re = new RegExp(`(^|[^a-z])${k.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^a-z])`);
+      if (re.test(t)) return ty.minutes;
+    }
+  }
+  return null;
+}
 
 /** `config.assignmentSessions` from user_scheduling_prefs, over the seeded defaults (all editable). */
 export function resolveSessionConfig(userConfig: any): SessionConfig {
@@ -77,6 +100,11 @@ export function resolveSessionConfig(userConfig: any): SessionConfig {
     finiteTypeKeywords: Array.isArray(raw.finiteTypeKeywords)
       ? raw.finiteTypeKeywords.filter((k: unknown) => typeof k === 'string' && k.trim()).map((k: string) => k.trim().toLowerCase())
       : [...DEFAULT_SESSION_CONFIG.finiteTypeKeywords],
+    effortByType: Array.isArray(raw.effortByType)
+      ? raw.effortByType
+          .filter((e: any) => e && Array.isArray(e.keywords) && typeof e.minutes === 'number' && e.minutes >= 15)
+          .map((e: any) => ({ label: String(e.label ?? ''), keywords: e.keywords.filter((k: unknown) => typeof k === 'string' && k.trim()), minutes: e.minutes }))
+      : DEFAULT_SESSION_CONFIG.effortByType.map((e) => ({ ...e, keywords: [...e.keywords] })),
   };
 }
 
@@ -362,8 +390,12 @@ export function planWorkSessions(input: SessionPlanInput): SessionPlan {
     // Never after the due instant; when late, keep a small buffer before it.
     const endLimit = late ? dueMs - config.lateBufferHours * 3600000 : Number.POSITIVE_INFINITY;
 
-    const effortDefaulted = !(parent.estimate_minutes && parent.estimate_minutes > 0);
-    const effort = effortDefaulted ? config.defaultEffortMinutes : parent.estimate_minutes!;
+    // A hand-set estimate wins. A missing estimate, or one that is only the default, is sized by type
+    // (paper / checkpoint / discussion), then by the default.
+    const handSet = !!(parent.estimate_minutes && parent.estimate_minutes > 0 && parent.estimate_minutes !== config.defaultEffortMinutes);
+    const typed = handSet ? null : effortForTitle(parent.title, config.effortByType);
+    const effortDefaulted = !handSet && typed === null;
+    const effort = handSet ? parent.estimate_minutes! : (typed ?? config.defaultEffortMinutes);
     const totalSessions = Math.max(1, Math.ceil(effort / config.sessionMinutes));
     const doneMinutes = own.filter(isDone).reduce((n, s) => n + (s.estimate_minutes || config.sessionMinutes), 0);
     const needed = Math.max(0, Math.ceil((effort - doneMinutes) / config.sessionMinutes));
@@ -395,6 +427,10 @@ export function planWorkSessions(input: SessionPlanInput): SessionPlan {
       plan.unschedules.push({ taskId: s.id, key: s.assignment_id, reason: 'surplus', patch: retirePatch(s, now) });
     }
     const usedIndexes = new Set(own.map((s) => parseSessionKey(s.assignment_id)!.index));
+    const missedSession = own.some((s) => {
+      const pd = s.scheduling_context?.session?.planned_date ?? null;
+      return !isDone(s) && !!pd && pd < today;
+    });
     const slotsToFill: Array<{ existing: SessionTask | null; index: number; keepDate: string | null }> = [];
     for (const s of reuse) {
       const pd = s.scheduling_context?.session?.planned_date ?? null;
@@ -439,7 +475,9 @@ export function planWorkSessions(input: SessionPlanInput): SessionPlan {
       const n = feasible.length, k = rest.length;
       const lastInHorizon = feasible.filter((d) => d <= horizonEnd).length - 1;
       const pickIndex = (i: number) => {
-        if (late) return Math.floor((i * n) / k);
+        // Late work, or work whose planned session was missed, starts at the NEXT free slot (owner 2026-11-15:
+        // a missed Research Paper session moved a week out instead of to the next free evening).
+        if (late || missedSession) return Math.floor((i * n) / k);
         const centre = Math.floor(((i + 0.5) * n) / k);
         return i === 0 && lastInHorizon >= 0 ? Math.min(centre, lastInHorizon) : centre;
       };
