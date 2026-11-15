@@ -3,7 +3,7 @@ import { resolveConflictRules, conflictWeightOf } from "../_shared/conflict-rule
 import { nightlySetting, skipNightlyRun } from '../_shared/nightly-switch.ts';
 import { freesSlot as frees_slot } from '../_shared/done-slot.ts';
 import { runsInBackground } from '../_shared/builder-background.ts';
-import { pendingIdsForDay } from "../_shared/per-day-rebuild.ts";
+import { pendingIdsForDay, restorableRows } from "../_shared/per-day-rebuild.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
   DEFAULT_TIME_WINDOWS,
@@ -757,13 +757,36 @@ async function buildSchedules(req: Request): Promise<Response> {
           const b = localDateToUtcBounds(isoDay, timezone);
           const ids = pendingIdsForDay(pendingRebuild, b, scheduledTaskIds);
           if (!ids.length) return 0;
+          // Remember the old slots so a failed placement can put the day back (restoreClearedDay).
+          const { data: prev } = await supabase.from('tasks').select('id, start_time, end_time').in('id', ids);
           const { data, error } = await supabase.from('tasks')
             .update({ start_time: null, end_time: null, is_scheduled: false, updated_at: now.toISOString() })
             .in('id', ids).eq('is_scheduled', true).neq('status', 'DONE').select('id');
           if (error) { console.warn(`    ⚠️ per-day clear failed for ${isoDay}:`, error.message); return 0; }
           for (const id of ids) pendingRebuild.delete(id);
+          const clearedIds = new Set((data ?? []).map((r: any) => r.id));
+          clearedByDay.set(isoDay, (prev ?? []).filter((r: any) => clearedIds.has(r.id) && r.start_time));
           console.log(`    🔄 Cleared ${data?.length ?? 0} of ${isoDay}'s previous placements for rebuild`);
           return data?.length ?? 0;
+        }
+        /**
+         * Put a day's cleared placements back when its placement call failed, so an AI outage leaves the
+         * previous schedule standing instead of an empty day (owner 2026-11-15: no tasks on a Sunday after two
+         * nights of 403 credit_limit_reached). Only rows still unscheduled and not DONE are touched.
+         */
+        const clearedByDay = new Map<string, Array<{ id: string; start_time: string; end_time: string | null }>>();
+        async function restoreClearedDay(isoDay: string, why: string): Promise<number> {
+          const rows = restorableRows(clearedByDay.get(isoDay) ?? [], scheduledTaskIds);
+          let restored = 0;
+          for (const r of rows) {
+            const { data } = await supabase.from('tasks')
+              .update({ start_time: r.start_time, end_time: r.end_time, is_scheduled: true, updated_at: now.toISOString() })
+              .eq('id', r.id).eq('is_scheduled', false).neq('status', 'DONE').select('id');
+            if (data?.length) { restored++; accumulatedBusySlots.push({ start_time: r.start_time, end_time: r.end_time ?? r.start_time }); }
+          }
+          clearedByDay.delete(isoDay);
+          if (rows.length) console.log(`    ♻️ Restored ${restored}/${rows.length} of ${isoDay}'s previous placements (${why})`);
+          return restored;
         }
         const accumulatedBusySlots: Array<{ start_time: string; end_time: string }> = [];
         const dailyAssignmentCount: Record<string, number> = {}; // targetISO → assignment count placed
@@ -1456,7 +1479,8 @@ async function buildSchedules(req: Request): Promise<Response> {
           if (!schedulerResponse.ok) {
             const errText = await schedulerResponse.text();
             console.error(`    ❌ Scheduler error: ${schedulerResponse.status} ${errText}`);
-            weekResults[targetISO] = { scheduled: 0, error: errText };
+            const restored = await restoreClearedDay(targetISO, `scheduler ${schedulerResponse.status}`);
+            weekResults[targetISO] = { scheduled: 0, error: errText, restored };
             continue;
           }
 
