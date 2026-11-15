@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { resolveConflictRules, conflictWeightOf } from "../_shared/conflict-rules.ts";
 import { nightlySetting, skipNightlyRun } from '../_shared/nightly-switch.ts';
+import { freesSlot as frees_slot } from '../_shared/done-slot.ts';
 import { runsInBackground } from '../_shared/builder-background.ts';
 import { pendingIdsForDay } from "../_shared/per-day-rebuild.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -521,15 +522,19 @@ async function buildSchedules(req: Request): Promise<Response> {
         }
 
         // ==========================================
-        // STEP 1.25: CLEAR SCHEDULING FROM COMPLETED TASKS
-        // DONE tasks with is_scheduled=true consume capacity — clear them
+        // STEP 1.25: FREE FUTURE SLOTS HELD BY COMPLETED TASKS
+        // A DONE task whose slot has NOT started yet frees that slot. A DONE task whose slot has started
+        // (earlier today, or in progress) stays on the schedule: owner 2026-11-12, "it shouldn't be removed
+        // from the schedule because it was done ... some views cross out but never disappear". Past time is
+        // not capacity, so keeping it costs nothing. Rule: _shared/done-slot.ts.
         // ==========================================
-        const { data: doneTasks } = await supabase
+        const { data: doneScheduled } = await supabase
           .from('tasks')
           .select('id, title, start_time, end_time')
           .eq('user_id', userId)
           .eq('status', 'DONE')
           .eq('is_scheduled', true);
+        const doneTasks = (doneScheduled ?? []).filter((t: any) => frees_slot(t.start_time, now));
 
         if (doneTasks && doneTasks.length > 0) {
           // Record completed tasks in history before clearing
