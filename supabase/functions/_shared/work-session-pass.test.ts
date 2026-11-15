@@ -17,7 +17,7 @@ const TW = {
   weekends: { start: 10, end: 20, days: [0, 6] },
   flexible: { start: 9, end: 22, days: [0, 1, 2, 3, 4, 5, 6] },
 };
-const CONFIG = { timeWindows: TW, categoryMappings: { PROF_EDUCATION: { maxPerDay: 2, maxPerDayWeekend: 6, defaultTimeWindow: ['evening', 'weekends'] } } };
+const CONFIG = { assignmentSessions: { effortByType: [] }, timeWindows: TW, categoryMappings: { PROF_EDUCATION: { maxPerDay: 2, maxPerDayWeekend: 6, defaultTimeWindow: ['evening', 'weekends'] } } };
 const NOW = new Date('2026-10-30T05:00:00Z'); // Fri 1 am ET build
 
 type Call = { table: string; op: 'insert' | 'update' | 'select'; payload?: any; filters: Array<[string, ...any[]]> };
