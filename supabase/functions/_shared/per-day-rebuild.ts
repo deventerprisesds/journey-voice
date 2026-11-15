@@ -24,3 +24,15 @@ export function pendingIdsForDay(
   }
   return out;
 }
+
+/**
+ * The cleared placements a failed day should get back: every row that had a slot and was not re-placed
+ * elsewhere in this run (re-placing it twice would double-book it). Added 2026-11-15 after two nights of
+ * AI 403s emptied every day (nightly-schedule-builder restoreClearedDay).
+ */
+export function restorableRows<T extends { id: string; start_time: string | null }>(
+  cleared: readonly T[],
+  alreadyPlaced: ReadonlySet<string>,
+): T[] {
+  return cleared.filter((r) => !!r.start_time && !alreadyPlaced.has(r.id));
+}
