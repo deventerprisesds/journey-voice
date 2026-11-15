@@ -3,6 +3,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { validateTaskWindow } from "../_shared/scheduling-defaults.ts";
 import { activityBusySlots } from "../_shared/activities.ts";
+import { callSchedulerAI, type FetchLike } from "../_shared/scheduler-ai.ts";
 import type { TaskCategory } from '../_shared/categories.ts';
 
 const corsHeaders = {
@@ -345,7 +346,7 @@ serve(async (req) => {
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     let aiSuggestion: any = null;
 
-    if (LOVABLE_API_KEY && userId) {
+    if ((Deno.env.get('OPENAI_API_KEY') || LOVABLE_API_KEY) && userId) {
       try {
         console.log('🤖 Fetching calendar data for AI enhancement...');
         const supabase = createClient(supabaseUrl, supabaseServiceKey);
@@ -464,26 +465,17 @@ Return ONLY valid JSON (no markdown):
   "flexibility": "strict|flexible"
 }`;
 
-        // Call Lovable AI
-        const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${LOVABLE_API_KEY}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: 'google/gemini-2.5-flash',
-            messages: [
-              { role: 'system', content: 'You are a scheduling assistant. Return only JSON.' },
-              { role: 'user', content: aiPrompt }
-            ],
-            temperature: 0.3,
-          }),
-        });
+        // OpenAI first, Lovable gateway as fallback (_shared/scheduler-ai.ts).
+        const ai = await callSchedulerAI(
+          aiPrompt,
+          { openai: Deno.env.get('OPENAI_API_KEY'), lovable: LOVABLE_API_KEY },
+          fetch as unknown as FetchLike,
+          { system: 'You are a scheduling assistant. Return only JSON.', temperature: 0.3 },
+        );
+        for (const at of ai.attempts) if (at.error) console.warn(`⚠️ AI ${at.provider} ${at.status}: ${at.error.slice(0, 200)}`);
 
-        if (aiResponse.ok) {
-          const aiData = await aiResponse.json();
-          const content = aiData.choices[0]?.message?.content;
+        if (ai.ok) {
+          const content = ai.content;
           
           // Parse AI suggestion
           const jsonMatch = content?.match(/\{[\s\S]*\}/);

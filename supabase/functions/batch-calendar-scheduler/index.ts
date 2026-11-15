@@ -451,7 +451,7 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
     console.log('🤖 Calling AI for batch scheduling...');
     const aiStartTime = Date.now();
 
-    // Lovable gateway first; OpenAI when the gateway refuses for credits/rate/outage. See _shared/scheduler-ai.ts.
+    // OpenAI first; the Lovable gateway only as a fallback. See _shared/scheduler-ai.ts.
     const ai = await callSchedulerAI(
       batchPrompt,
       { lovable: LOVABLE_API_KEY, openai: Deno.env.get('OPENAI_API_KEY') },
@@ -470,7 +470,7 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
-    if (ai.provider !== 'lovable') console.log(`🔁 Placement answered by ${ai.provider} (fallback)`);
+    if (ai.provider !== 'openai') console.log(`🔁 Placement answered by ${ai.provider} (fallback)`);
     const aiContent = ai.content;
     
     console.log(`✅ AI responded in ${Date.now() - aiStartTime}ms`);
