@@ -18,7 +18,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { getTodayInTimezone } from "../_shared/timezone.ts";
 import { fetchNexusAssignments, nexusApiBase } from "../_shared/nexus-read.ts";
 import {
-  planAssignmentSync, buildSyncDigest, describePlan, digestSendAt,
+  planAssignmentSync, buildSyncDigest, describePlan, digestSendAt, courseCodesInTitles,
   type ExistingTask, type PlannedCreate, type PlannedUpdate,
 } from "../_shared/assignment-intake.ts";
 import { resolveSessionConfig } from "../_shared/work-sessions.ts";
@@ -92,9 +92,17 @@ serve(async (req) => {
       .select('config').eq('user_id', userId).maybeSingle();
     const userConfig = prefRow?.config ?? {};
     const sessionCfg = resolveSessionConfig(userConfig);
+    // Class sessions on the calendar (7 days back, 21 ahead) keep their course active (owner 2026-11-15).
+    const lectureFrom = new Date(Date.parse(nowISO) - 7 * 86400000).toISOString();
+    const lectureTo = new Date(Date.parse(nowISO) + 21 * 86400000).toISOString();
+    const { data: lectureRows } = await supabase.from('external_calendar_events')
+      .select('title').eq('user_id', userId).is('source_task_id', null)
+      .gte('start_time', lectureFrom).lt('start_time', lectureTo).limit(500);
+    const lectureCourseCodes = courseCodesInTitles((lectureRows ?? []).map((r: any) => r.title));
     const plan = planAssignmentSync({
       rows: nexus.rows, tasks, todayISO, timezone, boardId, userId, nowISO,
       defaultEffortMinutes: sessionCfg.defaultEffortMinutes,
+      lectureCourseCodes,
     });
     console.log(`[ASSIGNMENT_SYNC] nexus_rows=${plan.scanned} current=${plan.currentCourses.join(',') || '-'} ` +
       `creates=${plan.creates.length} updates=${plan.updates.length} done_untouched=${plan.untouchedDone.length} ` +
