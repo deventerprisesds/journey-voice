@@ -1,6 +1,8 @@
-// WHAT:       The ONE model call batch-calendar-scheduler makes to place a day's tasks: Lovable AI gateway first,
-//             OpenAI as the fallback when the gateway refuses for a reason a second provider can fix
-//             (credits, rate limit, gateway outage). Returns the reply text or a reason; never throws.
+// WHAT:       The ONE scheduling model call (batch-calendar-scheduler placement, smart-calendar-scheduler hint):
+//             OpenAI first, the Lovable AI gateway only as a fallback when OpenAI refuses for a reason a second
+//             provider can fix (credits, rate limit, outage). Returns the reply text or a reason; never throws.
+//             Owner 2026-11-15: "I don't use loveable that is old... I use openai. Just make loveable the
+//             fallback instead of the other way around." (#119 had it the other way round.)
 // WHY:        2026-11-14 and 2026-11-15 every placement call returned 403 credit_limit_reached ("Workspace
 //             credit limit reached ... requires admin_action") from ai.gateway.lovable.dev, so both nightly
 //             builds placed 0 tasks and the owner's weekend was empty. OPENAI_API_KEY was already used by the
@@ -36,12 +38,17 @@ export function shouldFallBack(status: number): boolean {
 
 async function attempt(
   doFetch: FetchLike, url: string, key: string, model: string, prompt: string,
+  opts: { system?: string; temperature?: number } = {},
 ): Promise<{ status: number; content: string | null; error?: string }> {
+  const messages = [
+    ...(opts.system ? [{ role: 'system', content: opts.system }] : []),
+    { role: 'user', content: prompt },
+  ];
   try {
     const res = await doFetch(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }] }),
+      body: JSON.stringify({ model, messages, ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}) }),
     });
     const text = await res.text();
     if (!res.ok) return { status: res.status, content: null, error: text.slice(0, 500) };
@@ -56,27 +63,32 @@ async function attempt(
   }
 }
 
+export interface CallOptions {
+  /** Optional system message sent before the prompt. */
+  system?: string;
+  temperature?: number;
+}
+
 export async function callSchedulerAI(
   prompt: string,
   keys: { lovable?: string | null; openai?: string | null },
   doFetch: FetchLike,
+  opts: CallOptions = {},
 ): Promise<SchedulerAIResult> {
+  // Order matters: OpenAI is the owner's provider; Lovable is the old one, kept only as a fallback.
+  const order: Array<{ provider: 'openai' | 'lovable'; url: string; key?: string | null; model: string }> = [
+    { provider: 'openai', url: OPENAI_URL, key: keys.openai, model: OPENAI_MODEL },
+    { provider: 'lovable', url: LOVABLE_URL, key: keys.lovable, model: LOVABLE_MODEL },
+  ];
   const attempts: SchedulerAIResult['attempts'] = [];
-  let last = { status: 0, error: 'no AI provider key configured' as string | undefined };
-  if (keys.lovable) {
-    const r = await attempt(doFetch, LOVABLE_URL, keys.lovable, LOVABLE_MODEL, prompt);
-    attempts.push({ provider: 'lovable', status: r.status, error: r.error });
-    if (r.content) return { ok: true, content: r.content, provider: 'lovable', status: r.status, attempts };
+  let last: { status: number; error?: string } = { status: 0, error: 'no AI provider key configured' };
+  for (const p of order) {
+    if (!p.key) continue;
+    const r = await attempt(doFetch, p.url, p.key, p.model, prompt, opts);
+    attempts.push({ provider: p.provider, status: r.status, error: r.error });
+    if (r.content) return { ok: true, content: r.content, provider: p.provider, status: r.status, attempts };
     last = r;
-    if (!shouldFallBack(r.status) && r.status !== 200) {
-      return { ok: false, content: null, provider: null, status: r.status, error: r.error, attempts };
-    }
-  }
-  if (keys.openai) {
-    const r = await attempt(doFetch, OPENAI_URL, keys.openai, OPENAI_MODEL, prompt);
-    attempts.push({ provider: 'openai', status: r.status, error: r.error });
-    if (r.content) return { ok: true, content: r.content, provider: 'openai', status: r.status, attempts };
-    last = r;
+    if (!shouldFallBack(r.status) && r.status !== 200) break;
   }
   return { ok: false, content: null, provider: null, status: last.status, error: last.error, attempts };
 }
