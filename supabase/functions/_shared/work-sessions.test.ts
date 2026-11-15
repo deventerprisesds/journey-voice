@@ -9,7 +9,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  planWorkSessions, courseworkWindowsFor, resolveSessionConfig, DEFAULT_SESSION_CONFIG, sessionKey, isFiniteAssignment,
+  planWorkSessions, courseworkWindowsFor, resolveSessionConfig, DEFAULT_SESSION_CONFIG, sessionKey, isFiniteAssignment, effortForTitle,
   buildSessionWarningLines, AT_RISK_TAG, RETIRED_TAG, SESSION_TAG,
   type ParentTask, type SessionTask, type DayAvailability, type SessionPlan,
 } from './work-sessions.ts';
@@ -57,7 +57,7 @@ const NOW = new Date('2026-10-29T05:00:00Z'); // the 05:00 UTC build = Thu Oct 2
 
 const run = (over: Partial<Parameters<typeof planWorkSessions>[0]> = {}): SessionPlan => planWorkSessions({
   parents: [PAPER], sessions: [], days: days('2026-10-29', 60), now: NOW, timezone: TZ,
-  config: { ...DEFAULT_SESSION_CONFIG }, horizonDays: 7, ...over,
+  config: { ...DEFAULT_SESSION_CONFIG, effortByType: [] }, horizonDays: 7, ...over, // type sizing (2026-11-15) has its own tests (ET-*)
 });
 const localDay = (iso: string) => localDateOf(iso, TZ)!;
 const localHM = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(iso));
@@ -409,5 +409,45 @@ describe('P3 one paper a night (owner 2026-11-04)', () => {
     assert.ok(m, 'seed list present');
     const seeded = [...m![1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
     assert.deepEqual(seeded, DEFAULT_SESSION_CONFIG.finiteTypeKeywords);
+  });
+});
+
+// Owner 2026-11-15: size work by type (paper ~8h, checkpoint ~3h, discussion ~2h) and move a missed session to
+// the next free slot, not a week out. The Research Paper (due 12-09) had 2 x 90 min and slid 11-12 -> 11-19.
+describe('effort by type, and a missed session goes to the next free slot', () => {
+  const TYPED = { ...DEFAULT_SESSION_CONFIG };
+  it('ET-1 titles map to their type; no match is null', () => {
+    const t = DEFAULT_SESSION_CONFIG.effortByType;
+    assert.equal(effortForTitle('📚 Research Paper', t), 480);
+    assert.equal(effortForTitle('📚 Checkpoint 2 - Details', t), 180);
+    assert.equal(effortForTitle('📚 Week 3 Discussion Forum', t), 120);
+    assert.equal(effortForTitle('📚 Module 2 Captain’s Log', t), null);
+    assert.equal(effortForTitle('📚 Newspaper clipping', t), null, 'whole words only');
+  });
+  it('ET-2 the real case: Research Paper with the 180 default estimate gets 8h = 6 sessions', () => {
+    const p = run({ config: TYPED, days: days('2026-11-15', 60), now: new Date('2026-11-15T05:00:00Z') });
+    assert.equal(p.assignments[0].effortMinutes, 480);
+    assert.equal(p.assignments[0].totalSessions, 6);
+  });
+  it('ET-3 a hand-set estimate (not the default) wins over the type', () => {
+    const p = run({ config: TYPED, parents: [parent({ estimate_minutes: 270 })] });
+    assert.equal(p.assignments[0].effortMinutes, 270);
+  });
+  it('ET-4 Settings can replace the type table', () => {
+    const c = resolveSessionConfig({ assignmentSessions: { effortByType: [{ label: 'Lab', keywords: ['lab'], minutes: 60 }] } });
+    assert.deepEqual(c.effortByType.map((e) => e.minutes), [60]);
+    assert.equal(resolveSessionConfig({}).effortByType.length, 3);
+  });
+  it('ET-5 a missed session is re-placed on the next free day, not spread a week out', () => {
+    const night1 = run();
+    const rows = applied(night1);
+    const firstDate = rows.map((s) => s.scheduling_context?.session?.planned_date).sort()[0] as string;
+    const first = rows.find((s) => s.scheduling_context?.session?.planned_date === firstDate)!;
+    Object.assign(first, { start_time: null, end_time: null });
+    const next = new Date(Date.parse(`${firstDate}T05:00:00Z`) + 86400000);
+    const nextDay = next.toISOString().slice(0, 10);
+    const night2 = run({ sessions: rows, now: next, days: days(nextDay, 60) });
+    const moved = night2.retimes.find((r) => r.taskId === first.id)!;
+    assert.ok(moved.placement.date <= addDays(nextDay, 2), `next free slot, got ${moved.placement.date}`);
   });
 });
