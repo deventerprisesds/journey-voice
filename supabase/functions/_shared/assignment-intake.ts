@@ -87,6 +87,12 @@ export interface PlanInput {
   nowISO: string;
   /** Total effort when Nexus has none (Settings assignmentSessions.defaultEffortMinutes; owner: 180). */
   defaultEffortMinutes?: number;
+  /**
+   * Course codes that have class sessions on the owner's calendar near today (e.g. "MGT-702-W1 (202711)" ->
+   * "MGT702"). A course with lectures is active even when it has no dated assignment left (owner 2026-11-15:
+   * "You can not determine a course to be inactive by assignments alone. If it has lectures obviously it's active").
+   */
+  lectureCourseCodes?: string[];
 }
 
 const lower = (s: unknown) => String(s ?? '').trim().toLowerCase();
@@ -112,11 +118,34 @@ export function isDatedTodayOrLater(r: NexusAssignmentRow, todayISO: string, tz:
   return local !== null && local >= todayISO;
 }
 
-/** Owner 2026-10-28: a course is current iff it has ≥1 OPEN item dated today or later. */
-export function currentCourseKeys(rows: NexusAssignmentRow[], todayISO: string, tz: string): Set<string> {
+/** "MGT-702", "mgt 702", "MGT702" -> "MGT702". Null when the text holds no course code. */
+export function normalizeCourseCode(text: unknown): string | null {
+  const m = String(text ?? '').toUpperCase().match(/\b([A-Z]{2,5})[\s-]?(\d{3})\b/);
+  return m ? `${m[1]}${m[2]}` : null;
+}
+
+/** Every course code named in a list of calendar titles ("MGT-702-W1 (202711)" -> "MGT702"). */
+export function courseCodesInTitles(titles: readonly unknown[]): string[] {
+  const out = new Set<string>();
+  for (const t of titles) {
+    for (const m of String(t ?? '').toUpperCase().matchAll(/\b([A-Z]{2,5})[\s-]?(\d{3})\b/g)) out.add(`${m[1]}${m[2]}`);
+  }
+  return [...out];
+}
+
+/**
+ * A course is current when it has an OPEN item dated today or later (owner 2026-10-28), OR when it has class
+ * sessions on the calendar (owner 2026-11-15: lectures mean the course is active, whatever its assignments say).
+ */
+export function currentCourseKeys(
+  rows: NexusAssignmentRow[], todayISO: string, tz: string, lectureCourseCodes: readonly string[] = [],
+): Set<string> {
+  const lectures = new Set(lectureCourseCodes.map((c) => normalizeCourseCode(c)).filter(Boolean) as string[]);
   const out = new Set<string>();
   for (const r of rows) {
     if (!isNexusClosed(r.status) && isDatedTodayOrLater(r, todayISO, tz)) out.add(courseKey(r));
+    const code = normalizeCourseCode(courseCodeOf(r));
+    if (code && lectures.has(code)) out.add(courseKey(r));
   }
   return out;
 }
@@ -144,7 +173,7 @@ const sameInstant = (a: string | null, b: string | null) =>
 
 export function planAssignmentSync(input: PlanInput): SyncPlan {
   const { rows, tasks, todayISO, timezone, boardId, userId, nowISO } = input;
-  const current = currentCourseKeys(rows, todayISO, timezone);
+  const current = currentCourseKeys(rows, todayISO, timezone, input.lectureCourseCodes ?? []);
   const plan: SyncPlan = {
     scanned: rows.length,
     currentCourses: [...new Set(rows.filter((r) => current.has(courseKey(r))).map((r) => courseCodeOf(r) ?? courseKey(r)))],
