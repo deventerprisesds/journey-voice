@@ -14,6 +14,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getMailAccessToken } from "../_shared/mail-access-token.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -192,6 +193,18 @@ serve(async (req) => {
           ok: true,
           output: JSON.stringify({ user_id: resolved.userId, email: prof.data?.email ?? null, timezone }),
         });
+      }
+
+      // A mail access token is a live credential. It is minted HERE, behind this route's own
+      // JOURNEY_PROXY_TOKEN check, and never via execute-tool: journey's own model executors
+      // (tool-executor.ts, hybrid-assistant-api, twilio bridges) reach execute-tool with the
+      // service-role key and a MODEL-CHOSEN tool name, so a tool living there is model-reachable.
+      // (VERIFY-second-mailbox-1.md, 2026-11-05.) Only Huddle's server holds this route's token.
+      if (toolName === "get_mail_access_token") {
+        const r = await getMailAccessToken(supabase, resolved.userId, args ?? {});
+        return r.success
+          ? json({ ok: true, output: JSON.stringify(r.result) })
+          : json({ ok: false, output: JSON.stringify({ error: r.error }), error: r.error });
       }
 
       // Delegate to the deployed execute-tool function (single source of truth).

@@ -3366,6 +3366,17 @@ serve(async (req) => {
     // needs a caller that proves itself (owner-approved Option A, 2026-10-27): the service-role key
     // (huddle-proxy, after its own JOURNEY_PROXY_TOKEN check, resolves the user server-side) or the
     // user's own login. The anon key / another user's JWT / no bearer -> 401.
+    // A mail access token is a credential and is NEVER minted here: journey's own model executors
+    // call this function with the service-role key and a model-chosen tool name. It lives in
+    // huddle-proxy behind JOURNEY_PROXY_TOKEN. Refused for every caller, service role included.
+    if (toolName === 'get_mail_access_token') {
+      console.warn('[EXECUTE-TOOL] get_mail_access_token refused: only huddle-proxy mints mail tokens');
+      return new Response(JSON.stringify({ success: false, error: 'unauthorized' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
     if (toolName === 'register_push_token' && (await mintCaller(req, supabase, userId, SUPABASE_SERVICE_KEY)) === 'none') {
       console.warn('[EXECUTE-TOOL] register_push_token refused: caller is neither service role nor this user');
       return new Response(JSON.stringify({ success: false, error: 'unauthorized' }), {
