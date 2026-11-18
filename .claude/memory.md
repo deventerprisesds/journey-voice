@@ -1,5 +1,5 @@
 # Project Memory — journey-voice
-Last updated: 2026-11-18
+Last updated: 2026-11-19
 
 > **MOVE THE DATE ABOVE IN THE SAME COMMIT THAT APPENDS A SECTION.** It read `2026-09-21` while
 > this file already carried sections dated 2026-10-08 and 2026-10-12 — three weeks of the header
