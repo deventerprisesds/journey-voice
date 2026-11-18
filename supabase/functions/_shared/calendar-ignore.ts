@@ -9,6 +9,12 @@
 //
 // Editable: user_scheduling_prefs.config.calendarIgnoreTitles (a list of phrases). Absent = the seed below.
 // Matching is case-insensitive "title contains the phrase".
+//
+// TENTATIVE (owner 2026-11-19: "Items that are tentative on my schedule should be on the same exclusion list
+// as 'work block' items"): an event whose availability (Graph showAs / Google transparency, normalized to
+// `show_as`) is 'tentative' is ignored the same way. Editable: config.calendarIgnoreTentative (boolean).
+// Absent = true. This SUPERSEDES, for the stored calendar, meetings.ts AC-MTG-7's "tentative counts as a
+// meeting": a tentative event is no longer stored, so nothing downstream sees it.
 
 export const DEFAULT_CALENDAR_IGNORE_TITLES = ['work block'];
 
@@ -23,9 +29,40 @@ export function isIgnoredEvent(title: unknown, phrases: readonly string[]): bool
   return phrases.some((p) => p && t.includes(p));
 }
 
+export const DEFAULT_CALENDAR_IGNORE_TENTATIVE = true;
+
+/** Ignore tentative events? Only an explicit `false` turns it off. */
+export function resolveIgnoreTentative(userConfig: any): boolean {
+  return userConfig?.calendarIgnoreTentative !== false;
+}
+
+export interface CalendarIgnoreRules {
+  phrases: string[];
+  tentative: boolean;
+}
+
+export function resolveIgnoreRules(userConfig: any): CalendarIgnoreRules {
+  return { phrases: resolveIgnoreTitles(userConfig), tentative: resolveIgnoreTentative(userConfig) };
+}
+
+/** THE one ignore decision for a stored-calendar row: a title phrase, or a tentative availability. */
+export function isIgnoredCalendarEvent(
+  row: { title?: unknown; show_as?: unknown },
+  rules: CalendarIgnoreRules,
+): boolean {
+  if (isIgnoredEvent(row?.title, rules.phrases)) return true;
+  return rules.tentative && String(row?.show_as ?? '').toLowerCase() === 'tentative';
+}
+
 /** The owner's ignore list, read from their scheduling prefs. Every calendar WRITE path calls this. */
 // deno-lint-ignore no-explicit-any
 export async function loadIgnoreTitles(supabase: any, userId: string): Promise<string[]> {
+  return (await loadIgnoreRules(supabase, userId)).phrases;
+}
+
+/** Title phrases AND the tentative switch, read from the owner's scheduling prefs. */
+// deno-lint-ignore no-explicit-any
+export async function loadIgnoreRules(supabase: any, userId: string): Promise<CalendarIgnoreRules> {
   const { data } = await supabase.from('user_scheduling_prefs').select('config').eq('user_id', userId).maybeSingle();
-  return resolveIgnoreTitles(data?.config);
+  return resolveIgnoreRules(data?.config);
 }
