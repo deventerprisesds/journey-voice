@@ -181,6 +181,11 @@ function mkSupabase(existing: { id: string; external_event_id: string }[], upser
               calls.push({ op: 'select', table, arg: filters });
               res({ data: existing });
             },
+            // user_scheduling_prefs read for the ignore list (calendar-ignore.ts); no saved prefs = seed list.
+            maybeSingle() {
+              calls.push({ op: 'prefs', table, arg: filters });
+              return Promise.resolve({ data: null });
+            },
           };
           return b;
         },
@@ -270,6 +275,18 @@ test('D3 ok: app-only token for the tenant, reads the drive account path, upsert
   assert.deepEqual(sel.arg, [['connection_id', 'conn-1'], ['calendar_id', FEED_CALENDAR_ID]]);
   const del = calls.find((c) => c.op === 'delete')!;
   assert.deepEqual(del.arg, { col: 'id', ids: ['row-stale'] });
+});
+
+test('D3b work-block holds are never stored, and an already-stored one is removed (owner 2026-11-18)', async () => {
+  const existing = [{ id: 'row-wb', external_event_id: 'feed:work@example.org:AAMkWB' }];
+  const { client, calls } = mkSupabase(existing);
+  const { f } = mkFetch({ fileBody: JSON.stringify(envelope({}, [rec(), rec({ id: 'AAMkWB', subject: 'Work Block 2' })])) });
+  const r = await syncFeedCalendar(client, CONN, f, NOW);
+  assert.equal(r.status, 'ok');
+  const up = calls.find((c) => c.op === 'upsert')!;
+  assert.ok(!(up.arg as Array<{ title: string }>).some((row) => /work block/i.test(row.title)), 'no work block upserted');
+  const del = calls.find((c) => c.op === 'delete')!;
+  assert.deepEqual(del.arg, { col: 'id', ids: ['row-wb'] });
 });
 
 test('D4 a rejected snapshot changes NOTHING (last good rows stay)', async () => {
