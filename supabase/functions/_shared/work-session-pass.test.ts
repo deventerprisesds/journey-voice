@@ -130,7 +130,7 @@ describe('P3 session pass (I/O)', () => {
 describe('P3 builder wiring (static)', () => {
   const B = readFileSync(new URL('../nightly-schedule-builder/index.ts', import.meta.url), 'utf8');
   it('WIRE-1 both STEP 1.1 clears leave work-session cards to PASS 0', () => {
-    assert.equal((B.match(/\.not\('tags', 'cs', '\{work-session\}'\)/g) ?? []).length, 2);
+    assert.equal((B.match(/\.not\('tags', 'cs', '\{work-session\}'\)/g) ?? []).length, 4); // 2 in STEP 1.1 + 2 in STEP 3 (session-leak.test.ts)
   });
   it('WIRE-2 PASS 0 runs before tiering; managed tasks are skipped by the tiers and the daily candidates', () => {
     const pass0 = B.indexOf('runWorkSessionPass(supabase');
