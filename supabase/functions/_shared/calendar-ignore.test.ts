@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-import { isIgnoredEvent, resolveIgnoreTitles } from './calendar-ignore.ts';
+import { isIgnoredEvent, resolveIgnoreTitles, resolveIgnoreRules, isIgnoredCalendarEvent } from './calendar-ignore.ts';
 
 describe('ignored calendar events', () => {
   it('CI-1 every spelling seen in the data is ignored; real meetings are not', () => {
@@ -30,7 +30,7 @@ describe('ignored calendar events', () => {
 describe('every calendar write path applies the ignore list', () => {
   it('CI-4 the OneDrive feed filters before it stores (ignored rows then drop out as stale)', () => {
     const src = readFileSync(new URL('./onedrive-feed-sync.ts', import.meta.url), 'utf8');
-    assert.match(src, /const ignore = await loadIgnoreTitles\(supabase, connection\.user_id\);\n\s*const rows = mapFeedEventRows\([^\n]*\)\n\s*\.filter\(\(r: \{ title\?: string \| null \}\) => !isIgnoredEvent\(r\.title, ignore\)\);/);
+    assert.match(src, /const ignore = await loadIgnoreRules\(supabase, connection\.user_id\);\n\s*const rows = mapFeedEventRows\([^\n]*\)\n\s*\.filter\(\(r: \{ title\?: string \| null; show_as\?: string \| null \}\) => !isIgnoredCalendarEvent\(r, ignore\)\);/);
   });
   it('CI-5 no other file stores external calendar events without the ignore list', () => {
     // Writers that copy EXTERNAL events in. Task-created events (calendar-integration-manager) are the app's own.
@@ -47,5 +47,30 @@ describe('every calendar write path applies the ignore list', () => {
       return /from\(['"]external_calendar_events['"]\)\s*\n?\s*\.upsert\(/.test(src) || /\.from\(["']external_calendar_events["']\)\s*\.upsert/.test(src);
     });
     for (const w of writers) assert.ok(allowedWriters.has(w), `new calendar writer without the ignore list: ${w}`);
+  });
+});
+
+// Owner 2026-11-19: "Items that are tentative on my schedule should be on the same exclusion list as 'work
+// block' items". 37 tentative events were stored at the time (Story Point Poker, Platform Weekly, ...).
+describe('tentative events are ignored like work blocks', () => {
+  const rules = resolveIgnoreRules({});
+  it('CI-6 tentative is ignored by default; busy, free, oof, unknown and null are not', () => {
+    assert.equal(isIgnoredCalendarEvent({ title: 'Story Point Poker', show_as: 'tentative' }, rules), true);
+    assert.equal(isIgnoredCalendarEvent({ title: 'Platform Weekly', show_as: 'Tentative' }, rules), true);
+    for (const s of ['busy', 'free', 'oof', 'workingElsewhere', 'unknown', null, undefined, ''])
+      assert.equal(isIgnoredCalendarEvent({ title: '1:1 Andrew and Von', show_as: s }, rules), false, String(s));
+  });
+  it('CI-7 a title phrase still ignores whatever the availability', () => {
+    assert.equal(isIgnoredCalendarEvent({ title: 'Work Block 2', show_as: 'busy' }, rules), true);
+  });
+  it('CI-8 Settings can turn tentative off; only an explicit false does', () => {
+    assert.equal(isIgnoredCalendarEvent({ title: 'Platform Retro', show_as: 'tentative' }, resolveIgnoreRules({ calendarIgnoreTentative: false })), false);
+    assert.equal(resolveIgnoreRules({ calendarIgnoreTentative: 'no' }).tentative, true);
+    assert.equal(resolveIgnoreRules(null).tentative, true);
+  });
+  it('CI-9 delta-sync filters with the combined rule and purges already-stored tentative rows', () => {
+    const src = readFileSync(new URL('../calendar-delta-sync/index.ts', import.meta.url), 'utf8');
+    assert.match(src, /const kept = rows\.filter\(\(r\) => !isIgnoredCalendarEvent\(r, rules\)\);/);
+    assert.match(src, /if \(rules\.tentative\) \{\n\s*const \{ error \} = await supabaseClient\.from\('external_calendar_events'\)\.delete\(\)\n\s*\.eq\('connection_id', connection\.id\)\.is\('source_task_id', null\)\.eq\('show_as', 'tentative'\);/);
   });
 });

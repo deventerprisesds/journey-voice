@@ -42,6 +42,9 @@ export type ShowAs =
   | 'free' | 'tentative' | 'busy' | 'oof' | 'workingElsewhere' | 'unknown';
 
 /**
+ * SUPERSEDED for the stored calendar (owner 2026-11-19): tentative events are no longer STORED
+ * (calendar-ignore.ts, calendarIgnoreTentative, default on), so this rule only matters if that is
+ * switched off in Settings.
  * Owner's settled decision: `busy` and `tentative` count as a meeting;
  * `free` and `oof` do not. (AC-MTG-7 -- a stated, tested rule, not an accident of the field
  * having been discarded.)

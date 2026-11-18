@@ -21,7 +21,7 @@ import {
   parseTaskosFeedConfig,
   validateSnapshot,
 } from "./onedrive-feed.ts";
-import { isIgnoredEvent, loadIgnoreTitles } from "./calendar-ignore.ts";
+import { isIgnoredCalendarEvent, loadIgnoreRules } from "./calendar-ignore.ts";
 
 // deno-lint-ignore no-explicit-any
 type Client = any;
@@ -93,10 +93,11 @@ export async function syncFeedCalendar(
     // A rejected snapshot changes NOTHING: the rows already stored are the last good copy.
     if (!v.ok) return { status: `rejected:${v.reason}` };
 
-    // Owner-ignored titles ("work block") are never stored; already-stored ones fall out as stale below.
-    const ignore = await loadIgnoreTitles(supabase, connection.user_id);
+    // Owner-ignored events ("work block" titles, tentative availability) are never stored; already-stored
+    // ones fall out as stale below.
+    const ignore = await loadIgnoreRules(supabase, connection.user_id);
     const rows = mapFeedEventRows(v.records, cfg, connection, new Date(nowMs).toISOString())
-      .filter((r: { title?: string | null }) => !isIgnoredEvent(r.title, ignore));
+      .filter((r: { title?: string | null; show_as?: string | null }) => !isIgnoredCalendarEvent(r, ignore));
     if (rows.length) {
       const { error } = await supabase
         .from("external_calendar_events")

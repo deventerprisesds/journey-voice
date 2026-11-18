@@ -548,7 +548,7 @@ const SchedulingSettings: React.FC = () => {
           <CardTitle>Ignore these calendar events</CardTitle>
           <CardDescription>
             Events whose title contains any of these phrases are not imported, not shown, and never block time.
-            Separate phrases with commas.
+            Separate phrases with commas. Events marked Tentative are treated the same way unless you untick the box.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -560,6 +560,14 @@ const SchedulingSettings: React.FC = () => {
             }
             placeholder="work block"
           />
+          <label className="mt-3 flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={config.calendarIgnoreTentative !== false}
+              onChange={(e) => setConfig({ ...config, calendarIgnoreTentative: e.target.checked })}
+            />
+            Also ignore events marked Tentative
+          </label>
         </CardContent>
       </Card>
 

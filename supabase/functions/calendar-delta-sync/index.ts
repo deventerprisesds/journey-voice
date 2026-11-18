@@ -1,4 +1,4 @@
-import { resolveIgnoreTitles, isIgnoredEvent } from '../_shared/calendar-ignore.ts';
+import { resolveIgnoreRules, isIgnoredCalendarEvent } from '../_shared/calendar-ignore.ts';
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { normalizeAttendees, normalizeShowAs } from '../_shared/meetings.ts';
@@ -173,18 +173,25 @@ serve(async (req) => {
   }
 });
 
-/** Owner-ignored calendar events (e.g. "Work Block"): dropped before storing, and purged if already stored. */
+/** Owner-ignored calendar events ("Work Block" titles, tentative availability): dropped before storing, and
+ *  purged if already stored. A delta run only re-sends CHANGED events, so the purge is what removes ones
+ *  stored before the rule existed. */
 async function applyIgnoreList(supabaseClient: any, connection: any, rows: any[]): Promise<any[]> {
   const { data: pref } = await supabaseClient.from('user_scheduling_prefs')
     .select('config').eq('user_id', connection.user_id).maybeSingle();
-  const phrases = resolveIgnoreTitles(pref?.config);
-  if (!phrases.length) return rows;
-  const kept = rows.filter((r) => !isIgnoredEvent(r.title, phrases));
-  if (kept.length !== rows.length) console.log(`[calendar-delta-sync] Ignored ${rows.length - kept.length} event(s) by title (${phrases.join(', ')})`);
-  for (const p of phrases) {
+  const rules = resolveIgnoreRules(pref?.config);
+  if (!rules.phrases.length && !rules.tentative) return rows;
+  const kept = rows.filter((r) => !isIgnoredCalendarEvent(r, rules));
+  if (kept.length !== rows.length) console.log(`[calendar-delta-sync] Ignored ${rows.length - kept.length} event(s) (titles: ${rules.phrases.join(', ') || 'none'}; tentative: ${rules.tentative})`);
+  for (const p of rules.phrases) {
     const { error } = await supabaseClient.from('external_calendar_events').delete()
       .eq('connection_id', connection.id).is('source_task_id', null).ilike('title', `%${p.replace(/[%_]/g, '')}%`);
     if (error) console.warn('[calendar-delta-sync] ignore-list purge failed:', error.message);
+  }
+  if (rules.tentative) {
+    const { error } = await supabaseClient.from('external_calendar_events').delete()
+      .eq('connection_id', connection.id).is('source_task_id', null).eq('show_as', 'tentative');
+    if (error) console.warn('[calendar-delta-sync] tentative purge failed:', error.message);
   }
   return kept;
 }
