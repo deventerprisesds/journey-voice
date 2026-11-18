@@ -1,3 +1,4 @@
+import { firstFit } from '../_shared/first-fit.ts';
 import { callSchedulerAI, type FetchLike } from '../_shared/scheduler-ai.ts';
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -541,6 +542,7 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
     const scheduledTasks = [];
     const rejectedTasks = [];
     const acceptedSlots: Array<{ start: number; end: number }> = [];
+    const rejectDuration = new Map<string, number>();
     
     for (const result of scheduledResults) {
       // Handle off-by-one: AI sometimes returns 1-based index despite prompt saying 0-based
@@ -574,6 +576,8 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
         normalizedEnd = d.toISOString();
       }
       
+      const aiDurationMs = Math.max(15 * 60000, new Date(normalizedEnd).getTime() - new Date(normalizedStart).getTime());
+      rejectDuration.set(originalTask.id, aiDurationMs);
       // POST-AI VALIDATION 1: Check window constraints
       const validation = validateTaskWindow(
         normalizedStart,
@@ -661,6 +665,46 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
     
     if (rejectedTasks.length > 0) {
       console.log(`🚫 Post-AI validation rejected ${rejectedTasks.length} tasks for window violations`);
+    }
+
+    // FALLBACK: a rejected AI slot used to mean the task was simply not scheduled (2026-11-17: Thu/Fri got 0 of 3
+    // with 4h of business hours free). Put each rejected task in the first free gap of its allowed hours instead.
+    // _shared/first-fit.ts. Tasks with no fitting gap stay rejected, exactly as before.
+    {
+      const dayStartMs = new Date(`${targetDateISO}T00:00:00${tzOffset}`).getTime();
+      const nowFloor = Date.now() + 15 * 60000;
+      const busyAll = [
+        ...existingEventSlots.map((s: any) => ({ start: s._startMs, end: s._endMs })),
+        ...existingTaskSlots.map((s: any) => ({ start: s._startMs, end: s._endMs })),
+        ...existingActivitySlots.map((s: any) => ({ start: s._startMs, end: s._endMs })),
+      ];
+      const stillRejected: typeof rejectedTasks = [];
+      for (const r of rejectedTasks) {
+        const task = tasks.find((t: any) => t.id === r.taskId);
+        const dur = task?.estimate_minutes ? task.estimate_minutes * 60000 : (rejectDuration.get(r.taskId) ?? 60 * 60000);
+        const allowed = (st: number, en: number) => {
+          const a = validateTaskWindow(new Date(st).toISOString(), task?.category, userTimeWindows, filteredCategoryMappings, timezone);
+          const b = validateTaskWindow(new Date(en - 60000).toISOString(), task?.category, userTimeWindows, filteredCategoryMappings, timezone);
+          return a.valid && b.valid && a.actualWindow === b.actualWindow;
+        };
+        const ownSlot = (b: { start: number; end: number }, i: number) =>
+          !(i >= existingEventSlots.length && i < existingEventSlots.length + existingTaskSlots.length
+            && (existingTaskSlots[i - existingEventSlots.length] as any).id === r.taskId);
+        const slot = task ? firstFit({
+          dayStartMs, durationMs: dur, notBeforeMs: nowFloor,
+          busy: [...busyAll.filter(ownSlot), ...acceptedSlots], isAllowed: allowed,
+        }) : null;
+        if (!slot) { stillRejected.push(r); continue; }
+        acceptedSlots.push(slot);
+        scheduledTasks.push({
+          taskId: r.taskId, taskIndex: r.taskIndex,
+          start_time: new Date(slot.start).toISOString(), end_time: new Date(slot.end).toISOString(),
+          reasoning: `First free gap after the AI slot was rejected (${r.reason})`,
+        });
+        console.log(`    ♻️ First-fit placed "${task.title}" at ${new Date(slot.start).toISOString()} (AI slot rejected: ${r.reason})`);
+      }
+      rejectedTasks.length = 0;
+      rejectedTasks.push(...stillRejected);
     }
 
     // ============================================================
