@@ -116,6 +116,11 @@ export interface SchedulingConfig {
    * Backend contract: supabase/functions/_shared/nightly-switch.ts (skipNightlyRun).
    */
   nightlySchedule?: { enabled?: boolean; label?: string };
+  /**
+   * Calendar events to ignore everywhere (not stored, not shown, not busy time), matched by title phrase.
+   * Absent = seed ["work block"]. Backend contract: supabase/functions/_shared/calendar-ignore.ts.
+   */
+  calendarIgnoreTitles?: string[];
 }
 
 export type ConflictMatch =
@@ -392,6 +397,8 @@ export function mergeSchedulingConfig(
     // Owner rules only; never seeded. A save of an unrelated setting must not drop them.
     conflictRules: Array.isArray(userConfig.conflictRules) ? userConfig.conflictRules : [],
     // Same pass-through rule: dropping it on an unrelated save would silently switch an account back on.
+    // Same pass-through rule; undefined keeps the backend seed (["work block"]) in force.
+    calendarIgnoreTitles: Array.isArray(userConfig.calendarIgnoreTitles) ? userConfig.calendarIgnoreTitles : undefined,
     nightlySchedule: userConfig.nightlySchedule && typeof userConfig.nightlySchedule === 'object'
       ? { ...userConfig.nightlySchedule }
       : undefined,

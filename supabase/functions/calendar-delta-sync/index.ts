@@ -1,3 +1,4 @@
+import { resolveIgnoreTitles, isIgnoredEvent } from '../_shared/calendar-ignore.ts';
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { normalizeAttendees, normalizeShowAs } from '../_shared/meetings.ts';
@@ -172,6 +173,22 @@ serve(async (req) => {
   }
 });
 
+/** Owner-ignored calendar events (e.g. "Work Block"): dropped before storing, and purged if already stored. */
+async function applyIgnoreList(supabaseClient: any, connection: any, rows: any[]): Promise<any[]> {
+  const { data: pref } = await supabaseClient.from('user_scheduling_prefs')
+    .select('config').eq('user_id', connection.user_id).maybeSingle();
+  const phrases = resolveIgnoreTitles(pref?.config);
+  if (!phrases.length) return rows;
+  const kept = rows.filter((r) => !isIgnoredEvent(r.title, phrases));
+  if (kept.length !== rows.length) console.log(`[calendar-delta-sync] Ignored ${rows.length - kept.length} event(s) by title (${phrases.join(', ')})`);
+  for (const p of phrases) {
+    const { error } = await supabaseClient.from('external_calendar_events').delete()
+      .eq('connection_id', connection.id).is('source_task_id', null).ilike('title', `%${p.replace(/[%_]/g, '')}%`);
+    if (error) console.warn('[calendar-delta-sync] ignore-list purge failed:', error.message);
+  }
+  return kept;
+}
+
 async function syncOutlookDelta(
   supabaseClient: any, 
   connection: any, 
@@ -344,9 +361,10 @@ async function syncOutlookDelta(
       };
     });
 
+    const keptOutlook = await applyIgnoreList(supabaseClient, connection, eventsToUpsert);
     const { error: upsertError, data: upsertData } = await supabaseClient
       .from('external_calendar_events')
-      .upsert(eventsToUpsert, {
+      .upsert(keptOutlook, {
         onConflict: 'connection_id,external_event_id',
         ignoreDuplicates: false
       })
@@ -558,9 +576,10 @@ async function syncGoogleDelta(
       last_synced_at: new Date().toISOString()
     }));
 
+    const keptGoogle = await applyIgnoreList(supabaseClient, connection, eventsToUpsert);
     const { error: upsertError } = await supabaseClient
       .from('external_calendar_events')
-      .upsert(eventsToUpsert, {
+      .upsert(keptGoogle, {
         onConflict: 'connection_id,external_event_id',
         ignoreDuplicates: false
       });
