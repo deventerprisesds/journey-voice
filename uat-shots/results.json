@@ -1,0 +1,70 @@
+{
+  "results": [
+    {
+      "name": "T0 live bundle contains 'Also ignore events marked Tentative'",
+      "pass": false,
+      "detail": "NOT in any of 1 JS files on https://journey-voice.lovable.app -- #130's Settings change is not published yet"
+    },
+    {
+      "name": "T1 signed in as owner -> /settings renders",
+      "pass": true,
+      "detail": "landed on /settings"
+    },
+    {
+      "name": "T2 'Ignore these calendar events' card shows the 'Also ignore events marked Tentative' checkbox",
+      "pass": false,
+      "detail": "label count 0"
+    },
+    {
+      "name": "T3 it is ticked (default on, or the owner's saved choice)",
+      "pass": false,
+      "detail": "checked=null (read only, not toggled)"
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": false,
+      "detail": "Failed to load resource: the server responded with a status of 406 () | Failed to load resource: the server responded with a status of 406 ()"
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": false,
+      "detail": "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log | net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log"
+    }
+  ],
+  "failedRequests": [
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log",
+    "HTTP 406 https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/calendar_connections?select=metadata&id=eq.bb04653a-9fa9-4b23-8ab4-00a85b07665b",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log",
+    "HTTP 406 https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/calendar_connections?select=metadata&id=eq.89103a8c-12c7-4aec-b914-ddb6ca4be54b",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log",
+    "net::ERR_ABORTED https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log"
+  ]
+}
