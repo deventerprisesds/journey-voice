@@ -1,5 +1,5 @@
 # Project Memory — journey-voice
-Last updated: 2026-11-15
+Last updated: 2026-11-18
 
 > **MOVE THE DATE ABOVE IN THE SAME COMMIT THAT APPENDS A SECTION.** It read `2026-09-21` while
 > this file already carried sections dated 2026-10-08 and 2026-10-12 — three weeks of the header
@@ -856,7 +856,8 @@ business_hours by the "work" keyword, and because jsonb stores keys shortest-fir
 "workout"/"homework". Owner's direction: EXTEND (lane gates the window), never remove keywords. Also: do not
 reintroduce an employment start date into the JOB design — owner ruled it moot.
 
-## 2026-11-18 — work blocks, account merge, AI provider
+## Feature status / Active work — work-block filter, account merge, OpenAI-first scheduler (#119-#128, 2026-11-18; LIVE, owner NOT yet confirmed)
+- **Active (open):** Done-before-slot backfill or crossed-out display (actions row 24); Nexus assignments coverage (row 25); #126 auto-deploy did not fire (cause unknown).
 - **Calendar ignore list** (`_shared/calendar-ignore.ts`, config key `calendarIgnoreTitles`, default `['work block']`) is applied on BOTH writer paths: `calendar-delta-sync` (Outlook/Google) AND the OneDrive appointments feed (`_shared/onedrive-feed-sync.ts`, `calendar_id='onedrive-feed'`). #125 covered only the first; the feed re-added Work Blocks until #126. Test CI-5 fails if a new external-calendar writer skips the filter. Huddle reads Graph directly and filters in `graph-email.server.ts` (#279).
 - **#126 merge push did NOT auto-trigger deploy-supabase-functions** — deployed by manual dispatch from main. Cause not yet investigated.
 - **Supabase MCP write approvals never reach the owner** — use `apply-supabase-migration.yml` (inputs `migration`, `ref`) for data writes.
