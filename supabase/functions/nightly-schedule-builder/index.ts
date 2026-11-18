@@ -1053,7 +1053,8 @@ async function buildSchedules(req: Request): Promise<Response> {
             .select('id, task_topic_mappings!inner(topic_id)')
             .eq('user_id', userId)
             .is('completed_at', null)
-            .not('status', 'in', '("DONE","BLOCKED")');
+            .not('status', 'in', '("DONE","BLOCKED")')
+            .not('tags', 'cs', '{work-session}'); // sessions belong to PASS 0, including ones it created this run
 
           if (mappedError) {
             console.warn(`    ⚠️ Error fetching topic mappings:`, mappedError);
@@ -1069,7 +1070,11 @@ async function buildSchedules(req: Request): Promise<Response> {
             .or(unscheduledOrPending())
             .is('completed_at', null)
             .not('title', 'ilike', '%Test Task%')
-            .not('tags', 'cs', '{parking-lot}'); // parking-lot opts OUT of nightly scheduling (ACT-13)
+            .not('tags', 'cs', '{parking-lot}') // parking-lot opts OUT of nightly scheduling (ACT-13)
+            // Work-session cards belong to PASS 0. Its managedIds cannot list a card it created THIS run (no id
+            // at plan time), so on 2026-11-15 three new Research Paper sessions leaked here, were placed in
+            // already-past Sunday slots and lost their session context. Exclude by tag, not only by id.
+            .not('tags', 'cs', '{work-session}');
 
           const readyIds = (readyUpNextTasks || []).map((t: any) => t.id);
           const allCandidateIds = [...new Set([...mappedIds, ...readyIds])]
