@@ -121,6 +121,11 @@ export interface SchedulingConfig {
    * Absent = seed ["work block"]. Backend contract: supabase/functions/_shared/calendar-ignore.ts.
    */
   calendarIgnoreTitles?: string[];
+  /**
+   * Also ignore events whose availability is Tentative (same treatment as an ignored title).
+   * Absent = true. Backend contract: supabase/functions/_shared/calendar-ignore.ts (resolveIgnoreTentative).
+   */
+  calendarIgnoreTentative?: boolean;
 }
 
 export type ConflictMatch =
@@ -399,6 +404,8 @@ export function mergeSchedulingConfig(
     // Same pass-through rule: dropping it on an unrelated save would silently switch an account back on.
     // Same pass-through rule; undefined keeps the backend seed (["work block"]) in force.
     calendarIgnoreTitles: Array.isArray(userConfig.calendarIgnoreTitles) ? userConfig.calendarIgnoreTitles : undefined,
+    // Same pass-through rule; undefined keeps the backend default (ignore tentative) in force.
+    calendarIgnoreTentative: typeof userConfig.calendarIgnoreTentative === 'boolean' ? userConfig.calendarIgnoreTentative : undefined,
     nightlySchedule: userConfig.nightlySchedule && typeof userConfig.nightlySchedule === 'object'
       ? { ...userConfig.nightlySchedule }
       : undefined,
