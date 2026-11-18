@@ -16,6 +16,7 @@ Last updated: 2026-11-18
 
 
 
+- [2026-11-19] Calendar ignore list now also drops TENTATIVE events (show_as) — `_shared/calendar-ignore.ts` isIgnoredCalendarEvent; config.calendarIgnoreTentative (default on). AC-MTG-7 superseded for stored calendar. #130. NOT owner-confirmed.
 ## Done tasks kept on the schedule; Research Paper under-sized; MGT-702 dropped (2026-11-15, #117 merged + deployed; owner NOT yet confirmed)
 - **#117 (e93bcd7, deploy run 43727767655 success):** STEP 1.25 took EVERY scheduled DONE task off the schedule
   on each build. Midnight runs hid it; the 11-12 08:34 rebuild removed a task Done at 07:45 from 08:00-10:00.

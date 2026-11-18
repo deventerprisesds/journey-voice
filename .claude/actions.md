@@ -726,3 +726,10 @@ client work + own apps = VENTURES; Esri / Power BI / SDLC / ops decks = JOB; no 
 | 23 | Owner 2026-11-17: "go on the account merge" + delete test copies | **applied + recorded** #127 (cd047c3): von.ellis@ Google identity moved onto main account, duplicate deleted (backup `_acct_merge_backup_20261118`); 4 Test-Checkpoint copies deleted (backup `_test_task_cleanup_20261118`) | deventerprisesds/journey-voice#127 |
 | 24 | Owner 2026-11-15: "if the done slot hasn't passed, backfill it or cross it out — never blank" | **OPEN — not built yet** | — |
 | 25 | Owner 2026-11-15: "assignments make it to Nexus fine; the miss is scheduling" | **OPEN** — content.assignments shows only Checkpoint 2 + Research Paper for Nov–Dec; second db-query run not yet read | — |
+
+## ACT:ignore-tentative — tentative calendar items excluded like "work block" (2026-11-19)
+Owner: *"Items that are tentative on my schedule should be on the same exclusion list as 'work block' items"*.
+- **Shipped:** #130 `f858760`. `_shared/calendar-ignore.ts` rule = title phrase OR `show_as='tentative'` (`config.calendarIgnoreTentative`, default on); delta-sync (Outlook/Google) + OneDrive feed filter with it; delta-sync purges stored tentative rows; Settings checkbox "Also ignore events marked Tentative"; meetings.ts AC-MTG-7 marked superseded. Huddle side: huddle-extension-app #284.
+- **Evidence:** run-tests 718/718; calendar-ignore 9/9; mutate.sh FIRED (control EQUIVALENT) CI-6 x2, CI-9. Deploy Supabase Functions success (all functions: `_shared` changed).
+- **Live:** calendar-delta-sync triggered via pg_net (request 1012651, 200): owner's stored tentative events 37 → 0; 63 busy feed events kept.
+- **Open:** the Settings checkbox reaches the web app when Lovable publishes `main`. NOT owner-confirmed.

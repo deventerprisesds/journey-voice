@@ -1,0 +1,1 @@
+- [ ] PARKED: tentative-settings-checkbox | "Also ignore events marked Tentative" box in Settings (merged #130; the rule itself is already live and on by default) | state: not deployed (web app publishes via Lovable, not Actions) | since 2026-11-19 | decide: go/skip
