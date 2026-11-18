@@ -542,6 +542,27 @@ const SchedulingSettings: React.FC = () => {
         </CardContent>
       </Card>
 
+      {/* Calendar events ignored everywhere, by title phrase. Contract: _shared/calendar-ignore.ts */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Ignore these calendar events</CardTitle>
+          <CardDescription>
+            Events whose title contains any of these phrases are not imported, not shown, and never block time.
+            Separate phrases with commas.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Input
+            key={(config.calendarIgnoreTitles ?? ['work block']).join('|')}
+            defaultValue={(config.calendarIgnoreTitles ?? ['work block']).join(', ')}
+            onBlur={(e) =>
+              setConfig({ ...config, calendarIgnoreTitles: e.target.value.split(',').map((p) => p.trim()).filter(Boolean) })
+            }
+            placeholder="work block"
+          />
+        </CardContent>
+      </Card>
+
       {/* Nightly build on/off for THIS account (default on). Contract: _shared/nightly-switch.ts */}
       <Card>
         <CardHeader>
