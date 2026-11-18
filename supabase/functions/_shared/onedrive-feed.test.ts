@@ -181,6 +181,11 @@ function mkSupabase(existing: { id: string; external_event_id: string }[], upser
               calls.push({ op: 'select', table, arg: filters });
               res({ data: existing });
             },
+            // user_scheduling_prefs read for the ignore list (calendar-ignore.ts); no saved prefs = seed list.
+            maybeSingle() {
+              calls.push({ op: 'prefs', table, arg: filters });
+              return Promise.resolve({ data: null });
+            },
           };
           return b;
         },
