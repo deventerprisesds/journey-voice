@@ -6,6 +6,11 @@ the technical findings) and `.claude/accuracy-log.md` (wrong-first-answers).
 
 ---
 
+## ACT:task-priority-enum — Iris could not create tasks: parser put "BACKLOG" in priority (2026-11-19)
+- **Owner:** "why is iris failing at creating tasks? check the chat thread"
+- **Ground truth (execute-tool logs 2026-11-19 18:21:10Z / 18:22:23Z):** two `parse_and_create_tasks` calls ("Create a Trinnex RAG similar to the Azure agent RAG", "Build a Trinnex chatbot widget in Huddle") -> each task failed `22P02 invalid input value for enum task_priority: "BACKLOG"`. ai-task-parser (gpt-4o-mini) returned a STATUS word as priority; execute-tool wrote `(task.priority||'MEDIUM').toUpperCase()` unchecked.
+- **Fix:** `_shared/task-priority.ts` (`normalizePriority` for creates -> MEDIUM fallback; `recognizePriority` for updates -> ignore a bad value). Used at all four execute-tool priority writes. Tests P-1..P-6 (`task-priority.test.ts`), npm test 724/724 + new. Not yet owner-confirmed live.
+
 ## ACT:meeting-15min-reminder — no warning 15 minutes before a meeting (2026-11-12)
 Owner: *"my executive assistant agent is not letting me know that a meeting is about to start in 15 minutes"*.
 - [x] Root cause (live, owner account a3378f93): notification_prefs calendar reminders ON, 15 min, PUSH; 23 synced

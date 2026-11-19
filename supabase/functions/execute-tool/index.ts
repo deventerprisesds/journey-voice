@@ -4,6 +4,7 @@ import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezo
 import { activityBusySlots, resolveActivities, normalizeActivity, matchActivity, planPush, toMinutes, minutesToHHMM, parseClockTime, type PushItem } from "../_shared/activities.ts";
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { CATEGORY_KEYS, normalizeCategory, recognizeCategory } from "../_shared/categories.ts";
+import { normalizePriority, recognizePriority } from "../_shared/task-priority.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, activeCaveats } from "../_shared/scheduling-defaults.ts";
 import { mintCaller } from "../_shared/push-auth.ts";
@@ -926,7 +927,7 @@ async function createTask(supabase: any, userId: string, args: any): Promise<Exe
     const taskData: any = {
       title: args.title,
       description: args.description || null,
-      priority: args.priority?.toUpperCase() || 'MEDIUM',
+      priority: normalizePriority(args.priority),
       category: normalizeCategory(args.category),
       status: 'BACKLOG',
       board_id: board.id,
@@ -1004,7 +1005,8 @@ async function updateTask(supabase: any, userId: string, args: any): Promise<Exe
     if (args.title) updateData.title = args.title;
     if (args.description !== undefined) updateData.description = args.description;
     if (args.status) updateData.status = args.status.toUpperCase();
-    if (args.priority) updateData.priority = args.priority.toUpperCase();
+    // An unrecognised priority (e.g. a status word) is ignored rather than failing the whole update.
+    if (recognizePriority(args.priority)) updateData.priority = recognizePriority(args.priority);
     let categoryKept: string | null = null;
     if (args.category) {
       // An unrecognised category keeps the task's current one (it used to fail on the enum and change nothing).
@@ -1080,7 +1082,7 @@ async function batchUpdateTasks(supabase: any, userId: string, args: any): Promi
     if (u.title) data.title = u.title;
     if (u.description !== undefined) data.description = u.description;
     if (u.status) data.status = String(u.status).toUpperCase();
-    if (u.priority) data.priority = String(u.priority).toUpperCase();
+    if (recognizePriority(u.priority)) data.priority = recognizePriority(u.priority);
     if (u.category) {
       const cat = recognizeCategory(u.category);
       if (cat) data.category = cat;
@@ -1891,7 +1893,9 @@ async function parseAndCreateTasks(
       const taskData = {
         title: task.title,
         description: task.description || null,
-        priority: (task.priority || 'MEDIUM').toUpperCase(),
+        // The parser model has returned a STATUS word here ("BACKLOG", 2026-11-19), which the task_priority
+        // enum refuses -- so every task in the request failed. A stray value falls back to MEDIUM.
+        priority: normalizePriority(task.priority),
         category: normalizeCategory(task.category),
         status: task.status || args.default_status || ((normalizedStartTime || normalizedDueDate) ? 'UP_NEXT' : 'BACKLOG'),
         is_priority: isPriority,
