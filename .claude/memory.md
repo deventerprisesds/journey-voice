@@ -865,3 +865,11 @@ reintroduce an employment start date into the JOB design — owner ruled it moot
 - **Accounts:** dev@ and von.ellis@ Google identities both point at a3378f93 (merged 2026-11-18, #127). Backups `_acct_merge_backup_20261118`, `_test_task_cleanup_20261118` — drop later.
 - Scheduler AI: OpenAI gpt-4o-mini first, Lovable fallback (`_shared/scheduler-ai.ts`).
 - Settings fields (Nightly schedule toggle, Ignore-these-calendar-events) are NOT YET UAT-VERIFIED.
+
+## Feature status / Active work — task priority enum guard (#133, #134, #135, 2026-11-20; server LIVE, owner NOT yet confirmed)
+- **Cause of "Iris can't create tasks":** ai-task-parser (gpt-4o-mini) returned the STATUS word "BACKLOG" as priority; DB enum `task_priority` is LOW|MEDIUM|HIGH|URGENT, case-sensitive -> 22P02, whole insert refused.
+- **Single source:** `supabase/functions/_shared/task-priority.ts` -- `normalizePriority` (creates: unknown -> MEDIUM, CRITICAL -> URGENT), `recognizePriority` (updates: unknown -> leave unchanged and SAY so via `priority_not_changed`). Any new task writer must use it; the parser normalises at the source too.
+- **Live:** server functions deployed (run 44664258412). **Not live:** web New Task dialog + SmartTaskInput guard -- needs a Lovable publish (parked `priority-web-inserts`). NOT YET UAT-VERIFIED in the browser.
+
+## Hardening 2026-11-20 — an enum column is a contract every writer must meet
+A free-form model field (priority) was written straight into a Postgres enum. Five writers did this independently (execute-tool x4, twilio, MCP, two web screens). Guard: normalise at the producer AND at each writer through the one shared helper; test P-1..P-10 pins it.
