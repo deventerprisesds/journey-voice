@@ -40,7 +40,7 @@ export interface RebuildDeps {
   /** Newest 'schedule_rebuild_requested' row for this user at/after sinceIso, or null. */
   latestRequestSince: (userId: string, sinceIso: string) => Promise<{ created_at: string; metadata: any } | null>;
   /** Record that a rebuild was requested (the "one at a time" guard reads it back). */
-  recordRequest: (userId: string, scope: RebuildScope, startedAt: string) => Promise<void>;
+  recordRequest: (userId: string, scope: RebuildScope, startedAt: string, source?: string) => Promise<void>;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -131,6 +131,49 @@ export async function rebuildSchedule(deps: RebuildDeps, userId: string, args: a
   };
 }
 
+/** triggerSource the builder logs for a rebuild started by a calendar change (calendar-delta-sync). */
+export const CALENDAR_CHANGE_TRIGGER = 'calendar_change';
+
+/** The exact body nightly-schedule-builder receives for a calendar-change rebuild of TODAY. */
+export function buildCalendarChangeBody(userId: string) {
+  return { userId, singleDay: true, triggerSource: CALENDAR_CHANGE_TRIGGER };
+}
+
+/**
+ * Rebuild TODAY because the calendar changed (owner 2026-11-20: an event accepted mid-day must reach the plan).
+ * Same background kick and the same one-at-a-time guard as the agent tool, but no user confirmation: the
+ * trigger is the owner's own calendar action. Never throws.
+ */
+export async function kickCalendarChangeRebuild(deps: RebuildDeps, userId: string): Promise<{ started: boolean; reason?: string }> {
+  if (!userId) return { started: false, reason: 'no_user' };
+  const now = deps.now ?? Date.now;
+  try {
+    const inFlight = await deps.latestRequestSince(userId, new Date(now() - IN_FLIGHT_WINDOW_MS).toISOString());
+    if (inFlight && !(await deps.latestBuildSince(userId, inFlight.created_at))) return { started: false, reason: 'already_running' };
+  } catch (_) {
+    /* guard is best-effort */
+  }
+  const startedAt = new Date(now() - 1000).toISOString();
+  const run = (async () => {
+    try {
+      await deps.fetch(`${deps.supabaseUrl}/functions/v1/nightly-schedule-builder`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${deps.serviceKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildCalendarChangeBody(userId)),
+      });
+    } catch (e) {
+      console.error('[calendar_change rebuild] builder call failed:', e instanceof Error ? e.message : String(e));
+    }
+  })();
+  try {
+    await deps.recordRequest(userId, 'today', startedAt, CALENDAR_CHANGE_TRIGGER);
+  } catch (_) {
+    /* best-effort */
+  }
+  deps.waitUntil(run);
+  return { started: true };
+}
+
 export async function rebuildStatus(deps: RebuildDeps, userId: string, args: any): Promise<ToolResult> {
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
@@ -194,12 +237,12 @@ export function makeRebuildDeps(supabase: any, supabaseUrl: string, serviceKey: 
         .limit(1);
       return (data && data[0]) || null;
     },
-    recordRequest: async (userId, scope, startedAt) => {
+    recordRequest: async (userId, scope, startedAt, source = 'agent_tool') => {
       await supabase.from('activity_log').insert({
         user_id: userId,
         activity_type: 'schedule_rebuild_requested',
         status: 'started',
-        metadata: { scope, started_at: startedAt, source: 'agent_tool' },
+        metadata: { scope, started_at: startedAt, source },
       });
     },
     latestBuildSince: async (userId, sinceIso) => {
