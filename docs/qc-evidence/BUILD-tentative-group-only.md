@@ -54,3 +54,20 @@
 # fail 0
 ```
 Not run: `tsc`/`deno check` (no node_modules and no deno in this container).
+
+## Mutation proofs (`mutate.sh`, anchors in files, bare test names)
+| guard | mutation | test | result | exit |
+|---|---|---|---|---|
+| group threshold | `.length >= TENTATIVE_GROUP_MIN_OTHERS;` -> `.length >= 1;` (calendar-ignore.ts) | CI-11 | FIRED (control EQUIVALENT) | 0 |
+| targeted purge | `.filter((r: any) => isTentativeGroup(r, rules.ownerEmails))` -> `.filter((r: any) => true)` | CI-15 | FIRED (control EQUIVALENT) | 0 |
+| today-change trigger (accepted) | `return was === 'tentative' && now !== 'tentative';` -> `return false;` (calendar-today-change.ts) | TC-1 | FIRED (control EQUIVALENT) | 0 |
+| today-only filter | removed the `!== today) return false;` line | TC-2 | FIRED (control EQUIVALENT) | 0 |
+
+## Open / not done
+- Migration NOT applied; edge functions NOT deployed (by instruction).
+- Not type-checked (`deno check` / `tsc` unavailable here).
+- Already-purged solo/1:1 tentative rows need a full resync to return (see the RESTORING line above).
+- A tentative event with an unknown attendee list (`attendees: []`) is now KEPT, by decision; a group invite stored
+  without attendee capture will show until its attendees are captured.
+- The 15-min cron runs calendar-delta-sync for ALL active READ connections each tick (token refreshes included).
+- Ledger: `.claude/actions.md` ACT:tentative-group-only, `.claude/memory.md` 2026-11-20 line.

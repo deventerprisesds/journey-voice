@@ -738,6 +738,12 @@ client work + own apps = VENTURES; Esri / Power BI / SDLC / ops decks = JOB; no 
 | 24 | Owner 2026-11-15: "if the done slot hasn't passed, backfill it or cross it out — never blank" | **OPEN — not built yet** | — |
 | 25 | Owner 2026-11-15: "assignments make it to Nexus fine; the miss is scheduling" | **OPEN** — content.assignments shows only Checkpoint 2 + Research Paper for Nov–Dec; second db-query run not yet read | — |
 
+## ACT:tentative-group-only — ignore tentative only for group invites; accepted-mid-day reaches today's plan (2026-11-20)
+Owner: *"The ignore tentative should be adjusted to only when it isn't a meeting with me alone but is instead a group meeting or when I update it from tentative to accepted it has to immediately update on my schedule"*.
+- **Built (branch `claude_tentative-group-only`, NOT merged, NOT deployed, migration NOT applied):** group threshold 2 others; targeted purge; feed mailbox counted as owner; calendar-integration-manager filters; 15-min delta-sync cron; today-change rebuild.
+- **Evidence:** docs/qc-evidence/BUILD-tentative-group-only.md (npm test 743/743; mutate.sh FIRED control EQUIVALENT x4).
+- **Open:** review + merge + apply migration + deploy; restore already-purged solo/1:1 rows with a full resync. NOT owner-confirmed.
+
 ## ACT:ignore-tentative — tentative calendar items excluded like "work block" (2026-11-19)
 Owner: *"Items that are tentative on my schedule should be on the same exclusion list as 'work block' items"*.
 - **Shipped:** #130 `f858760`. `_shared/calendar-ignore.ts` rule = title phrase OR `show_as='tentative'` (`config.calendarIgnoreTentative`, default on); delta-sync (Outlook/Google) + OneDrive feed filter with it; delta-sync purges stored tentative rows; Settings checkbox "Also ignore events marked Tentative"; meetings.ts AC-MTG-7 marked superseded. Huddle side: huddle-extension-app #284.
