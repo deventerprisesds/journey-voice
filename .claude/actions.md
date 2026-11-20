@@ -742,7 +742,11 @@ client work + own apps = VENTURES; Esri / Power BI / SDLC / ops decks = JOB; no 
 Owner: *"The ignore tentative should be adjusted to only when it isn't a meeting with me alone but is instead a group meeting or when I update it from tentative to accepted it has to immediately update on my schedule"*.
 - **Built (branch `claude_tentative-group-only`, NOT merged, NOT deployed, migration NOT applied):** group threshold 2 others; targeted purge; feed mailbox counted as owner; calendar-integration-manager filters; 15-min delta-sync cron; today-change rebuild.
 - **Evidence:** docs/qc-evidence/BUILD-tentative-group-only.md (npm test 743/743; mutate.sh FIRED control EQUIVALENT x4).
-- **Open:** review + merge + apply migration + deploy; restore already-purged solo/1:1 rows with a full resync. NOT owner-confirmed.
+- **Shipped 2026-11-20:** #138 squash `7061bdc`. Deploy Supabase Functions run 44672973773 success; drift check 52/53 match
+  (the 1 drift is `mcp`, untouched by #138, pre-existing). Cron migration applied via MCP (`calendar-delta-sync-job`, */15).
+  First live run 05:45 UTC: full re-sync of both Outlook connections (no sync_token) + feed upserted 69; log "Ignored 6 event(s)
+  (titles: work block; tentative groups: true)". Solo/1:1 tentatives restored by that full sync (no manual reset needed).
+- **Open:** owner to confirm live: accept a tentative meeting mid-day -> appears on today's schedule within ~15 min. NOT owner-confirmed.
 
 ## ACT:ignore-tentative — tentative calendar items excluded like "work block" (2026-11-19)
 Owner: *"Items that are tentative on my schedule should be on the same exclusion list as 'work block' items"*.
