@@ -1005,8 +1005,14 @@ async function updateTask(supabase: any, userId: string, args: any): Promise<Exe
     if (args.title) updateData.title = args.title;
     if (args.description !== undefined) updateData.description = args.description;
     if (args.status) updateData.status = args.status.toUpperCase();
-    // An unrecognised priority (e.g. a status word) is ignored rather than failing the whole update.
+    // An unrecognised priority (e.g. a status word) is ignored rather than failing the whole update -- and
+    // SAID, so the agent never reports "priority set" for a value that was dropped (verifier loop 2 D3).
+    let priorityKept: string | null = null;
     if (recognizePriority(args.priority)) updateData.priority = recognizePriority(args.priority);
+    else if (args.priority !== undefined && args.priority !== null && args.priority !== '') {
+      priorityKept = String(args.priority);
+      console.warn(`[UPDATE_TASK] priority "${priorityKept}" is not a priority; kept the current one`);
+    }
     let categoryKept: string | null = null;
     if (args.category) {
       // An unrecognised category keeps the task's current one (it used to fail on the enum and change nothing).
@@ -1035,7 +1041,9 @@ async function updateTask(supabase: any, userId: string, args: any): Promise<Exe
     if (!Object.keys(updateData).length) {
       return { success: false, error: categoryKept
         ? `"${categoryKept}" is not a category (use one of: ${CATEGORY_KEYS.join(', ')}); the task was not changed`
-        : "No updatable fields provided" };
+        : priorityKept
+          ? `"${priorityKept}" is not a priority (use one of: LOW, MEDIUM, HIGH, URGENT); the task was not changed`
+          : "No updatable fields provided" };
     }
 
     const { data, error } = await supabase
@@ -1057,10 +1065,14 @@ async function updateTask(supabase: any, userId: string, args: any): Promise<Exe
 
     return {
       success: true,
-      result: { task: data, ...(categoryKept ? { category_not_changed: categoryKept } : {}) },
-      message: categoryKept
-        ? `Updated task "${data.title}" (category "${categoryKept}" is not a category, so it stays ${data.category})`
-        : `Updated task "${data.title}"`
+      result: {
+        task: data,
+        ...(categoryKept ? { category_not_changed: categoryKept } : {}),
+        ...(priorityKept ? { priority_not_changed: priorityKept } : {}),
+      },
+      message: `Updated task "${data.title}"` +
+        (categoryKept ? ` (category "${categoryKept}" is not a category, so it stays ${data.category})` : '') +
+        (priorityKept ? ` (priority "${priorityKept}" is not a priority, so it stays ${data.priority})` : '')
     };
   } catch (error) {
     return { success: false, error: extractErrorMessage(error) };
@@ -1076,9 +1088,12 @@ async function batchUpdateTasks(supabase: any, userId: string, args: any): Promi
   // Fire every task update CONCURRENTLY. These rows are independent, so there's no reason to wait for
   // one before starting the next — sequential awaits here were the whole reason grooming felt slow
   // (N round-trips back-to-back). Promise.all collapses that to ~one round-trip of wall time.
-  const results = await Promise.all(updates.map(async (u): Promise<{ ok: boolean; task_id?: string; error?: string }> => {
+  const results = await Promise.all(updates.map(async (u): Promise<{ ok: boolean; task_id?: string; error?: string; priority_not_changed?: string }> => {
     if (!u?.task_id) return { ok: false, error: "missing task_id" };
     const data: any = {};
+    // A priority that is not LOW/MEDIUM/HIGH/URGENT is dropped AND reported per task (verifier loop 2 D3).
+    const badPriority = u.priority !== undefined && u.priority !== null && u.priority !== '' && !recognizePriority(u.priority)
+      ? String(u.priority) : undefined;
     if (u.title) data.title = u.title;
     if (u.description !== undefined) data.description = u.description;
     if (u.status) data.status = String(u.status).toUpperCase();
@@ -1093,19 +1108,29 @@ async function batchUpdateTasks(supabase: any, userId: string, args: any): Promi
     if (u.definition_of_done !== undefined) data.definition_of_done = u.definition_of_done ? String(u.definition_of_done) : null;
     if (typeof u.rank === "number") { data.is_priority = true; data.priority_rank = u.rank; }
     else if (u.unset_rank) { data.is_priority = false; data.priority_rank = null; }
-    if (!Object.keys(data).length) return { ok: false, task_id: u.task_id, error: "no fields to update" };
+    if (!Object.keys(data).length) {
+      return { ok: false, task_id: u.task_id, error: badPriority ? `"${badPriority}" is not a priority; nothing to update` : "no fields to update" };
+    }
     const { error } = await supabase.from('tasks').update(data).eq('id', u.task_id).eq('user_id', userId);
-    return error ? { ok: false, task_id: u.task_id, error: error.message } : { ok: true, task_id: u.task_id };
+    return error
+      ? { ok: false, task_id: u.task_id, error: error.message }
+      : { ok: true, task_id: u.task_id, ...(badPriority ? { priority_not_changed: badPriority } : {}) };
   }));
   let updated = 0;
+  const priorityNotChanged: Array<{ task_id?: string; priority: string }> = [];
   for (const r of results) {
     if (r.ok) updated++;
     else failed.push({ task_id: r.task_id, error: r.error ?? "update failed" });
+    if (r.ok && r.priority_not_changed) priorityNotChanged.push({ task_id: r.task_id, priority: r.priority_not_changed });
   }
   return {
     success: true,
-    result: { updated, failed_count: failed.length, failed: failed.slice(0, 10) },
-    message: `Updated ${updated} of ${updates.length} tasks`,
+    result: {
+      updated, failed_count: failed.length, failed: failed.slice(0, 10),
+      ...(priorityNotChanged.length ? { priority_not_changed: priorityNotChanged.slice(0, 10) } : {}),
+    },
+    message: `Updated ${updated} of ${updates.length} tasks` +
+      (priorityNotChanged.length ? `; priority NOT changed on ${priorityNotChanged.length} (not LOW/MEDIUM/HIGH/URGENT)` : ''),
   };
 }
 
