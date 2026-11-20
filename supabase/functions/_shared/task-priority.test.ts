@@ -45,6 +45,14 @@ describe('task priority', () => {
       assert.ok(/payload\.priority = priority\.toUpperCase\(\)/.test(src), `${rel} writes a lower-case priority`);
     }
   });
+  it('P-9 the parser normalises at the source and both web inserts are guarded (verifier loop 1 D1/D2)', () => {
+    const parser = readFileSync(new URL('../ai-task-parser/index.ts', import.meta.url), 'utf8');
+    assert.ok(/priority: normalizePriority\(rawTask\?\.priority\)/.test(parser), 'ai-task-parser returns the raw model priority');
+    const modal = readFileSync(new URL('../../../src/components/TaskCreationModal.tsx', import.meta.url), 'utf8');
+    assert.ok(/priority: normalizePriority\(task\.priority\)/.test(modal), 'TaskCreationModal inserts the raw parser priority');
+    const smart = readFileSync(new URL('../../../src/components/SmartTaskInput.tsx', import.meta.url), 'utf8');
+    assert.ok(/priority: normalizePriority\(editedSuggestion\.priority\)/.test(smart), 'SmartTaskInput inserts the raw priority');
+  });
   it('P-6 every execute-tool priority write goes through the check', () => {
     const src = readFileSync(new URL('../execute-tool/index.ts', import.meta.url), 'utf8');
     assert.ok(!/priority:\s*\(task\.priority \|\| 'MEDIUM'\)\.toUpperCase\(\)/.test(src), 'parse_and_create still writes the raw parser priority');
