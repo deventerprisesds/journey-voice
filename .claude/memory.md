@@ -866,7 +866,7 @@ reintroduce an employment start date into the JOB design — owner ruled it moot
 - Scheduler AI: OpenAI gpt-4o-mini first, Lovable fallback (`_shared/scheduler-ai.ts`).
 - Settings fields (Nightly schedule toggle, Ignore-these-calendar-events) are NOT YET UAT-VERIFIED.
 
-## Feature status / Active work — task priority enum guard (#133, #134, #135, 2026-11-20; server LIVE, owner NOT yet confirmed)
+## Feature status / Active work — ACT:task-priority-enum: task priority enum guard (#133-#136, 2026-11-20; server LIVE, web part awaits Lovable publish and is NOT YET UAT-VERIFIED, owner NOT yet confirmed)
 - **Cause of "Iris can't create tasks":** ai-task-parser (gpt-4o-mini) returned the STATUS word "BACKLOG" as priority; DB enum `task_priority` is LOW|MEDIUM|HIGH|URGENT, case-sensitive -> 22P02, whole insert refused.
 - **Single source:** `supabase/functions/_shared/task-priority.ts` -- `normalizePriority` (creates: unknown -> MEDIUM, CRITICAL -> URGENT), `recognizePriority` (updates: unknown -> leave unchanged and SAY so via `priority_not_changed`). Any new task writer must use it; the parser normalises at the source too.
 - **Live:** server functions deployed (run 44664258412). **Not live:** web New Task dialog + SmartTaskInput guard -- needs a Lovable publish (parked `priority-web-inserts`). NOT YET UAT-VERIFIED in the browser.
