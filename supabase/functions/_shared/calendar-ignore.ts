@@ -1,5 +1,5 @@
 // WHAT:       Calendar events the owner wants IGNORED everywhere (never stored, never shown, never treated as
-//             busy time), matched on the title. Pure; read by calendar-delta-sync before it stores events.
+//             busy time): title phrases, and tentative GROUP invites. Read by every calendar write path.
 // WHY:        Owner 2026-11-18: "Any schedule block from my work calendar that includes 'work block' should
 //             be filtered out up front so it doesn't appear in taskos or huddle and doesn't take up slots."
 //             113 "Work Block 1/2/3" events were stored; the 11-17 build rejected tasks for overlapping them.

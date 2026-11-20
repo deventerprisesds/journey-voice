@@ -1,5 +1,5 @@
 // WHAT:       Live browser check, READ ONLY: journey Settings -> Scheduling shows the new
-//             "Also ignore events marked Tentative" checkbox under "Ignore these calendar events".
+//             "Also ignore Tentative group invites" checkbox under "Ignore these calendar events".
 // WHY:        Owner 2026-11-19: "Items that are tentative on my schedule should be on the same exclusion
 //             list as 'work block' items" (#130). The web app publishes via Lovable, outside Actions, so
 //             this is the only way to see whether the checkbox is live.
@@ -11,7 +11,7 @@ import { readFileSync, existsSync } from "node:fs";
 const STORAGE_KEY = "sb-wwxgajrtmslzklnyplah-auth-token"; // src/integrations/supabase/client.ts
 const OWNER_ID = "a3378f93-d655-4913-b2fa-ca5b1d8020f1";
 const CARD_TITLE = "Ignore these calendar events";
-const LABEL = "Also ignore events marked Tentative";
+const LABEL = "Also ignore Tentative group invites"; // label text since 2026-11-20 (group-only rule)
 let origin = null;
 
 async function bundleHasLabel({ page, check }) {

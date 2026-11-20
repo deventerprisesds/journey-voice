@@ -22,6 +22,7 @@ import {
   validateSnapshot,
 } from "./onedrive-feed.ts";
 import { isIgnoredCalendarEvent, loadIgnoreRules } from "./calendar-ignore.ts";
+import { detectTodayChange } from "./calendar-today-change.ts";
 
 // deno-lint-ignore no-explicit-any
 type Client = any;
@@ -33,6 +34,8 @@ export interface FeedSyncResult {
   upserted?: number;
   removed?: number;
   skipped?: number;
+  /** A kept feed event starting TODAY is new, or moved off 'tentative' -> today's plan is rebuilt. */
+  todayChanged?: boolean;
 }
 
 export async function syncFeedCalendar(
@@ -99,6 +102,7 @@ export async function syncFeedCalendar(
     const ignore = await loadIgnoreRules(supabase, connection.user_id, [cfg.mailbox, cfg.driveAccount]);
     const rows = mapFeedEventRows(v.records, cfg, connection, new Date(nowMs).toISOString())
       .filter((r: { title?: string | null; show_as?: string | null; attendees?: unknown }) => !isIgnoredCalendarEvent(r, ignore));
+    const todayChanged = await detectTodayChange(supabase, connection, rows, nowMs);
     if (rows.length) {
       const { error } = await supabase
         .from("external_calendar_events")
@@ -124,7 +128,7 @@ export async function syncFeedCalendar(
       const { error } = await supabase.from("external_calendar_events").delete().in("id", stale);
       if (error) console.error("[onedrive-feed] stale delete failed", error.message);
     }
-    return { status: "ok", upserted: rows.length, removed: stale.length, skipped: v.skipped };
+    return { status: "ok", upserted: rows.length, removed: stale.length, skipped: v.skipped, ...(todayChanged ? { todayChanged } : {}) };
   } catch (err) {
     console.error("[onedrive-feed] sync failed", err instanceof Error ? err.message : err);
     return { status: "error" };

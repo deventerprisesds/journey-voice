@@ -33,3 +33,24 @@
   `sync_token` (`update calendar_connections set sync_token = null where id = <conn>`) and run calendar-delta-sync,
   or call calendar-integration-manager `sync_events` for the window. The OneDrive feed is a full snapshot every run,
   so feed rows come back on the next run with no action.
+- (e1) migration `20261120120000_calendar_delta_sync_cron.sql`: pg_cron `calendar-delta-sync-job` every 15 min, one
+  empty-body call (the function then syncs every active READ connection). Modelled on send-digests-job. NOT APPLIED.
+  No automated test (SQL); reviewed by reading against 20260913170000.
+- (e2) `_shared/calendar-today-change.ts` `todayCalendarChanged()` / `detectTodayChange()` (read BEFORE upsert; today =
+  builder's `user_scheduling_prefs.timezone`, default America/New_York). Wired into Outlook, Google and the OneDrive
+  feed; `calendar-delta-sync` collects users in `todayChangedUsers` and kicks ONE rebuild per user per run, after the
+  loop. Covered by TC-1 (tentative->busy today triggers), TC-2 (tomorrow-only does not), TC-3 (new today; local date),
+  TC-4 (unchanged / still tentative does not), TC-5 (reads today rows only), TC-8 (wiring, once per user).
+- (e3) `_shared/rebuild-schedule.ts` `kickCalendarChangeRebuild()` reuses the agent tool's background kick and its
+  one-at-a-time guard; body `{userId, singleDay:true, triggerSource:'calendar_change'}`; `recordRequest` takes an
+  optional `source`. Covered by TC-6, TC-7; existing rebuild-schedule tests still pass.
+- (f) copy: SchedulingSettings.tsx card description + checkbox label; calendar-ignore.ts header; UAT
+  `scripts/uat/settings-tentative-checks.mjs` LABEL updated to the new label text.
+
+## Test results (`npm test` = node scripts/run-tests.mjs, 2026-11-20)
+```
+# tests 743
+# pass 743
+# fail 0
+```
+Not run: `tsc`/`deno check` (no node_modules and no deno in this container).
