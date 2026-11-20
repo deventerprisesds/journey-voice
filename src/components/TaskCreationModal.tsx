@@ -35,6 +35,7 @@ import { useAssignmentSelection } from '@/contexts/AssignmentSelectionContext';
 import TimeSlotGrid from '@/components/TimeSlotGrid';
 import { useBatchScheduling } from '@/hooks/useBatchScheduling';
 import { getOrCreateDefaultBoardId, loadExistingTasksForContext, insertDemoTasks, DEMO_USER_ID } from '@/utils/demoData';
+import { normalizePriority } from '../../supabase/functions/_shared/task-priority.ts';
 
 interface ParsedTask {
   title: string;
@@ -653,7 +654,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
           description: task.description || null,
           board_id: effectiveBoardId,
           user_id: userId,
-          priority: task.priority,
+          priority: normalizePriority(task.priority),
           category: (task.category === 'PROF_EDUCATION' ? 'EDUCATION' : task.category) as any,
           // WORKFLOW state, never the category. Mirrors journey's own insert rule
           // (execute-tool: (start_time || due_date) ? 'UP_NEXT' : 'BACKLOG') using the very

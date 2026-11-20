@@ -12,6 +12,7 @@ import EditableTaskSuggestion from './EditableTaskSuggestion';
 import { fetchPendingAssignments } from '@/utils/assignmentFetching';
 import { useAssignmentSelection } from '@/contexts/AssignmentSelectionContext';
 import type { TaskCategory } from '@/types/task';
+import { normalizePriority } from '../../supabase/functions/_shared/task-priority.ts';
 
 interface SmartTaskInputProps {
   tasks: Task[];
@@ -122,7 +123,7 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
         .insert({
           title: editedSuggestion.title,
           description: editedSuggestion.description,
-          priority: editedSuggestion.priority,
+          priority: normalizePriority(editedSuggestion.priority),
           category: (editedSuggestion.category === 'PROF_EDUCATION' ? 'EDUCATION' : editedSuggestion.category) as any,
           start_time: startTime.toISOString(),
           end_time: endTime.toISOString(),
@@ -232,7 +233,7 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
         <EditableTaskSuggestion
           suggestion={{
             title: lastSuggestion.parsedTask.title,
-            priority: lastSuggestion.parsedTask.priority || 'MEDIUM',
+            priority: normalizePriority(lastSuggestion.parsedTask.priority),
             category: lastSuggestion.parsedTask.category || 'LIFE',
             estimate_minutes: lastSuggestion.parsedTask.estimate_minutes || 60,
             scheduledStart: lastSuggestion.scheduledSlot?.start || '',

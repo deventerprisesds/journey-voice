@@ -2,6 +2,7 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { CATEGORY_KEYS, normalizeCategory } from "../_shared/categories.ts";
+import { normalizePriority } from "../_shared/task-priority.ts";
 import { buildCategoryGuide, categoryHintsFromKeywords } from "../_shared/category-guide.ts";
 
 const corsHeaders = {
@@ -382,7 +383,12 @@ Examples (category varies; status is a workflow state in every one):
       
       const tasks = rawTasks.map((rawTask: any) => {
         // A category the model invents ("Work", "job ") maps onto a real one; an exact name maps to itself.
-        const task = { ...rawTask, category: normalizeCategory(rawTask?.category) };
+        // Priority is normalised at the SOURCE (2026-11-19: the model returned "BACKLOG"), so every consumer --
+        // execute-tool, the web TaskCreationModal and SmartTaskInput -- receives a valid task_priority value.
+        const task = { ...rawTask, category: normalizeCategory(rawTask?.category), priority: normalizePriority(rawTask?.priority) };
+        if (rawTask?.priority !== task.priority) {
+          console.log(`Priority "${rawTask?.priority}" normalised to ${task.priority} for "${task.title}"`);
+        }
         if (rawTask?.category !== task.category) {
           console.log(`🏷️ Category "${rawTask?.category}" normalised to ${task.category} for "${task.title}"`);
         }
