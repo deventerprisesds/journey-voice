@@ -8,11 +8,16 @@
 export const TASK_PRIORITIES = ["LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 
-/** The priority if it is a real task_priority value (any case, trimmed), else null. */
+/** Spellings other surfaces offer that mean a real value: the phone-call tool offered "CRITICAL". */
+const PRIORITY_ALIASES: Record<string, TaskPriority> = { CRITICAL: "URGENT" };
+
+/** The priority if it is a real task_priority value (any case, trimmed; known aliases mapped), else null.
+ *  The enum is case-sensitive in Postgres ('medium' is refused), so this is also the upper-caser. */
 export function recognizePriority(v: unknown): TaskPriority | null {
   if (typeof v !== "string") return null;
   const up = v.trim().toUpperCase();
-  return (TASK_PRIORITIES as readonly string[]).includes(up) ? (up as TaskPriority) : null;
+  if ((TASK_PRIORITIES as readonly string[]).includes(up)) return up as TaskPriority;
+  return PRIORITY_ALIASES[up] ?? null;
 }
 
 /** For a NEW task: a real priority, or MEDIUM. A stray value (e.g. a status word) never fails the insert. */

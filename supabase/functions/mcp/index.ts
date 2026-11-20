@@ -81,7 +81,8 @@ var create_task_default = defineTool2({
       title
     };
     if (description) payload.description = description;
-    if (priority) payload.priority = priority;
+    // task_priority is upper-case only in Postgres; the schema offers lower-case words.
+    if (priority) payload.priority = priority.toUpperCase();
     if (due_date) payload.due_date = due_date;
     if (typeof is_priority === "boolean") payload.is_priority = is_priority;
     const { data, error } = await client.from("tasks").insert(payload).select().single();
