@@ -32,6 +32,19 @@ describe('task priority', () => {
     assert.equal(recognizePriority('BACKLOG'), null);
     assert.equal(recognizePriority('medium'), 'MEDIUM');
   });
+  it('P-7 "CRITICAL" (offered by the phone-call tool) maps to URGENT', () => {
+    assert.equal(normalizePriority('critical'), 'URGENT');
+    assert.equal(recognizePriority('CRITICAL'), 'URGENT');
+  });
+  it('P-8 the phone-call tool and the MCP create_task write a valid, upper-case priority', () => {
+    const tw = readFileSync(new URL('../twilio-voice-handler/index.ts', import.meta.url), 'utf8');
+    assert.ok(/priority: normalizePriority\(args\.priority\)/.test(tw), 'twilio-voice-handler writes the raw priority');
+    assert.ok(!/"CRITICAL"\]/.test(tw), 'twilio-voice-handler still offers CRITICAL in its tool schema');
+    for (const rel of ['../mcp/index.ts', '../../../src/lib/mcp/tools/create-task.ts']) {
+      const src = readFileSync(new URL(rel, import.meta.url), 'utf8');
+      assert.ok(/payload\.priority = priority\.toUpperCase\(\)/.test(src), `${rel} writes a lower-case priority`);
+    }
+  });
   it('P-6 every execute-tool priority write goes through the check', () => {
     const src = readFileSync(new URL('../execute-tool/index.ts', import.meta.url), 'utf8');
     assert.ok(!/priority:\s*\(task\.priority \|\| 'MEDIUM'\)\.toUpperCase\(\)/.test(src), 'parse_and_create still writes the raw parser priority');

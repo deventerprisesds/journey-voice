@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { normalizePriority } from "../_shared/task-priority.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, createHealthResponse, CONVERSATION_RELAY_CONFIG, BRIDGE_ENDPOINTS, type PhoneCallMode } from "../_shared/config.ts";
 
@@ -63,7 +64,7 @@ const phoneTools = [
           title: { type: "string", description: "Task title" },
           description: { type: "string", description: "Task description" },
           due_date: { type: "string", description: "Due date in YYYY-MM-DD format" },
-          priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "CRITICAL"], description: "Task priority" }
+          priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"], description: "Task priority" }
         },
         required: ["title"]
       }
@@ -336,7 +337,7 @@ async function executeTool(toolName: string, args: Record<string, unknown>, user
           title: args.title as string,
           description: (args.description as string) || null,
           due_date: args.due_date ? `${args.due_date}T23:59:59` : null,
-          priority: (args.priority as string) || 'MEDIUM',
+          priority: normalizePriority(args.priority),
           status: 'BACKLOG'
         });
 
