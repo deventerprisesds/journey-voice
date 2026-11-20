@@ -1,1 +1,2 @@
 - [ ] PARKED: tentative-settings-checkbox | "Also ignore events marked Tentative" box in Settings (merged #130; the rule itself is already live and on by default) | state: not deployed (web app publishes via Lovable, not Actions) | since 2026-11-19 | decide: go/skip
+- [ ] PARKED: priority-web-inserts | Task-creation screens (New Task dialog, smart task input) save a valid priority even if the AI returns a bad one (merged #134) | state: not deployed (web app publishes via Lovable, not Actions) | since 2026-11-20 | decide: go/skip
