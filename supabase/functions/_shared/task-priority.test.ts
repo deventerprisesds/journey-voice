@@ -53,6 +53,12 @@ describe('task priority', () => {
     const smart = readFileSync(new URL('../../../src/components/SmartTaskInput.tsx', import.meta.url), 'utf8');
     assert.ok(/priority: normalizePriority\(editedSuggestion\.priority\)/.test(smart), 'SmartTaskInput inserts the raw priority');
   });
+  it('P-10 a dropped priority is REPORTED on update and batch update (verifier loop 2 D3)', () => {
+    const src = readFileSync(new URL('../execute-tool/index.ts', import.meta.url), 'utf8');
+    assert.ok(/priority_not_changed: priorityKept/.test(src), 'update_task does not report a dropped priority');
+    assert.ok(/is not a priority \(use one of: LOW, MEDIUM, HIGH, URGENT\); the task was not changed/.test(src), 'a priority-only update with a bad value is not explained');
+    assert.ok(/priority NOT changed on \$\{priorityNotChanged\.length\}/.test(src), 'batch update does not report dropped priorities');
+  });
   it('P-6 every execute-tool priority write goes through the check', () => {
     const src = readFileSync(new URL('../execute-tool/index.ts', import.meta.url), 'utf8');
     assert.ok(!/priority:\s*\(task\.priority \|\| 'MEDIUM'\)\.toUpperCase\(\)/.test(src), 'parse_and_create still writes the raw parser priority');
