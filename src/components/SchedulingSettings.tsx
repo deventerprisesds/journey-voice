@@ -548,7 +548,7 @@ const SchedulingSettings: React.FC = () => {
           <CardTitle>Ignore these calendar events</CardTitle>
           <CardDescription>
             Events whose title contains any of these phrases are not imported, not shown, and never block time.
-            Separate phrases with commas. Events marked Tentative are treated the same way unless you untick the box.
+            Separate phrases with commas. Tentative group invites (two or more other people) are ignored; your own holds and 1:1s stay. Untick the box to keep every tentative event.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -566,7 +566,7 @@ const SchedulingSettings: React.FC = () => {
               checked={config.calendarIgnoreTentative !== false}
               onChange={(e) => setConfig({ ...config, calendarIgnoreTentative: e.target.checked })}
             />
-            Also ignore events marked Tentative
+            Also ignore Tentative group invites (two or more other people); your own holds and 1:1s stay
           </label>
         </CardContent>
       </Card>

@@ -22,6 +22,7 @@ import {
   validateSnapshot,
 } from "./onedrive-feed.ts";
 import { isIgnoredCalendarEvent, loadIgnoreRules } from "./calendar-ignore.ts";
+import { detectTodayChange } from "./calendar-today-change.ts";
 
 // deno-lint-ignore no-explicit-any
 type Client = any;
@@ -33,6 +34,8 @@ export interface FeedSyncResult {
   upserted?: number;
   removed?: number;
   skipped?: number;
+  /** A kept feed event starting TODAY is new, or moved off 'tentative' -> today's plan is rebuilt. */
+  todayChanged?: boolean;
 }
 
 export async function syncFeedCalendar(
@@ -93,11 +96,13 @@ export async function syncFeedCalendar(
     // A rejected snapshot changes NOTHING: the rows already stored are the last good copy.
     if (!v.ok) return { status: `rejected:${v.reason}` };
 
-    // Owner-ignored events ("work block" titles, tentative availability) are never stored; already-stored
-    // ones fall out as stale below.
-    const ignore = await loadIgnoreRules(supabase, connection.user_id);
+    // Owner-ignored events ("work block" titles, tentative GROUP invites) are never stored; already-stored
+    // ones fall out as stale below. The work mailbox is the owner too: without it the owner would count as
+    // "another person" in his own work invites and a tentative 1:1 would look like a group.
+    const ignore = await loadIgnoreRules(supabase, connection.user_id, [cfg.mailbox, cfg.driveAccount]);
     const rows = mapFeedEventRows(v.records, cfg, connection, new Date(nowMs).toISOString())
-      .filter((r: { title?: string | null; show_as?: string | null }) => !isIgnoredCalendarEvent(r, ignore));
+      .filter((r: { title?: string | null; show_as?: string | null; attendees?: unknown }) => !isIgnoredCalendarEvent(r, ignore));
+    const todayChanged = await detectTodayChange(supabase, connection, rows, nowMs);
     if (rows.length) {
       const { error } = await supabase
         .from("external_calendar_events")
@@ -123,7 +128,7 @@ export async function syncFeedCalendar(
       const { error } = await supabase.from("external_calendar_events").delete().in("id", stale);
       if (error) console.error("[onedrive-feed] stale delete failed", error.message);
     }
-    return { status: "ok", upserted: rows.length, removed: stale.length, skipped: v.skipped };
+    return { status: "ok", upserted: rows.length, removed: stale.length, skipped: v.skipped, ...(todayChanged ? { todayChanged } : {}) };
   } catch (err) {
     console.error("[onedrive-feed] sync failed", err instanceof Error ? err.message : err);
     return { status: "error" };

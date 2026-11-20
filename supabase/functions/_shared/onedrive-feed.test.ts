@@ -172,6 +172,17 @@ function mkSupabase(existing: { id: string; external_event_id: string }[], upser
         },
         select(_cols: string) {
           const filters: [string, unknown][] = [];
+          // Owner-address reads for the ignore list (calendar-ignore.ts loadIgnoreRules -> resolveOwnerEmails).
+          // No profile / connection rows here: the feed's own mailbox is what marks the owner.
+          if (table === 'profiles' || table === 'calendar_connections') {
+            const o = {
+              eq: () => o,
+              limit: () => o,
+              maybeSingle: () => { calls.push({ op: 'owners', table }); return Promise.resolve({ data: null }); },
+              then(res: (v: unknown) => void) { calls.push({ op: 'owners', table }); res({ data: [] }); },
+            };
+            return o;
+          }
           const b = {
             eq(col: string, val: unknown) {
               filters.push([col, val]);
@@ -287,6 +298,24 @@ test('D3b work-block holds are never stored, and an already-stored one is remove
   assert.ok(!(up.arg as Array<{ title: string }>).some((row) => /work block/i.test(row.title)), 'no work block upserted');
   const del = calls.find((c) => c.op === 'delete')!;
   assert.deepEqual(del.arg, { col: 'id', ids: ['row-wb'] });
+});
+
+test('D3c tentative: owner-only and 1:1 work invites are kept (work mailbox = owner); a group is dropped (owner 2026-11-20)', async () => {
+  const { client, calls } = mkSupabase([]);
+  const recs = [
+    // Owner-only hold: the only attendee is the work mailbox itself.
+    rec({ id: 'SOLO', subject: 'Focus hold', showAs: 'Tentative', requiredAttendees: 'Von <work@example.org>', optionalAttendees: '', resourceAttendees: '' }),
+    // 1:1: the work mailbox plus exactly one other person (and a room, which is not a person).
+    rec({ id: 'ONE', subject: '1:1 Dana', showAs: 'Tentative', requiredAttendees: 'work@example.org; dana@example.org', optionalAttendees: '', resourceAttendees: 'room4@example.org' }),
+    // Group: dana + pat + opt besides the mailbox.
+    rec({ id: 'GRP', subject: 'Platform Weekly', showAs: 'Tentative', requiredAttendees: 'work@example.org; dana@example.org; pat@example.org' }),
+  ];
+  const { f } = mkFetch({ fileBody: JSON.stringify(envelope({}, recs)) });
+  const r = await syncFeedCalendar(client, CONN, f, NOW);
+  assert.equal(r.status, 'ok');
+  const up = calls.find((c) => c.op === 'upsert')!;
+  const ids = (up.arg as Array<{ external_event_id: string }>).map((row) => row.external_event_id).sort();
+  assert.deepEqual(ids, ['feed:work@example.org:ONE', 'feed:work@example.org:SOLO']);
 });
 
 test('D4 a rejected snapshot changes NOTHING (last good rows stay)', async () => {

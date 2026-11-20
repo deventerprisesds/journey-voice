@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { loadIgnoreRules, isIgnoredCalendarEvent } from '../_shared/calendar-ignore.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { normalizeAttendees, normalizeShowAs, type NormalizedAttendee, type ShowAs } from '../_shared/meetings.ts';
 
@@ -195,13 +196,17 @@ async function syncCalendarEvents(supabaseClient: any, connectionId: string, sta
     last_synced_at: new Date().toISOString(),
   }));
 
+  // Same owner ignore list as every other calendar write path ("work block" titles, tentative GROUP invites).
+  const ignore = await loadIgnoreRules(supabaseClient, connection.user_id);
+  const keptEvents = eventsToInsert.filter((r: any) => !isIgnoredCalendarEvent(r, ignore));
+
   const { error: upsertError } = await supabaseClient
     .from('external_calendar_events')
-    .upsert(eventsToInsert, { onConflict: 'connection_id,external_event_id', ignoreDuplicates: false });
+    .upsert(keptEvents, { onConflict: 'connection_id,external_event_id', ignoreDuplicates: false });
 
   if (upsertError) throw new Error(`Failed to sync events: ${upsertError.message}`);
 
-  return new Response(JSON.stringify({ success: true, synced_events: events.length }),
+  return new Response(JSON.stringify({ success: true, synced_events: keptEvents.length, ignored_events: events.length - keptEvents.length }),
     { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 }
 

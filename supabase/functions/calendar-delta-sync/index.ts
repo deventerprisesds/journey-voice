@@ -1,9 +1,11 @@
-import { resolveIgnoreRules, isIgnoredCalendarEvent } from '../_shared/calendar-ignore.ts';
+import { loadIgnoreRules, isIgnoredCalendarEvent, purgeTentativeGroups } from '../_shared/calendar-ignore.ts';
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { normalizeAttendees, normalizeShowAs } from '../_shared/meetings.ts';
 import { syncFeedCalendar } from '../_shared/onedrive-feed-sync.ts';
 import { isFeedEventId } from '../_shared/onedrive-feed.ts';
+import { detectTodayChange } from '../_shared/calendar-today-change.ts';
+import { kickCalendarChangeRebuild, makeRebuildDeps } from '../_shared/rebuild-schedule.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -17,6 +19,8 @@ interface DeltaSyncResult {
   events_updated: number;
   events_deleted: number;
   error?: string;
+  /** A kept event starting TODAY is new, or moved off 'tentative' (calendar-today-change.ts). */
+  today_changed?: boolean;
 }
 
 serve(async (req) => {
@@ -64,6 +68,8 @@ serve(async (req) => {
 
     const results: DeltaSyncResult[] = [];
     const now = new Date();
+    // Users whose TODAY changed in this run -> one single-day rebuild each, after the loop.
+    const todayChangedUsers = new Set<string>();
 
     for (const connection of connections) {
       // If token is expired, try to refresh it before skipping
@@ -123,6 +129,7 @@ serve(async (req) => {
           // TASKOS_ONEDRIVE_FEED secret names this account; never fails the Outlook sync.
           try {
             const feed = await syncFeedCalendar(supabaseClient, connection);
+            if (feed.todayChanged) result.today_changed = true;
             if (feed.status !== 'off' && feed.status !== 'not_this_account') {
               (result as DeltaSyncResult & { feed?: unknown }).feed = feed;
               console.log('[calendar-delta-sync] work-calendar feed', feed);
@@ -143,6 +150,7 @@ serve(async (req) => {
           };
         }
 
+        if (result.today_changed) todayChangedUsers.add(connection.user_id);
         results.push(result);
       } catch (error: any) {
         console.error(`[calendar-delta-sync] Error syncing ${connection.id}:`, error);
@@ -159,6 +167,16 @@ serve(async (req) => {
 
     console.log('[calendar-delta-sync] Sync completed', { results });
 
+    // Owner 2026-11-20: a meeting accepted (or added) mid-day must reach TODAY's plan now, not at the next
+    // nightly build. At most ONE rebuild per user per run; the builder's one-at-a-time guard skips overlap.
+    if (todayChangedUsers.size) {
+      const deps = makeRebuildDeps(supabaseClient, Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '', fetch);
+      for (const uid of todayChangedUsers) {
+        const kick = await kickCalendarChangeRebuild(deps, uid);
+        console.log('[calendar-delta-sync] today changed -> rebuild today', { user_id: uid, ...kick });
+      }
+    }
+
     return new Response(
       JSON.stringify({ success: true, results }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -173,26 +191,20 @@ serve(async (req) => {
   }
 });
 
-/** Owner-ignored calendar events ("Work Block" titles, tentative availability): dropped before storing, and
+/** Owner-ignored calendar events ("Work Block" titles, tentative GROUP invites): dropped before storing, and
  *  purged if already stored. A delta run only re-sends CHANGED events, so the purge is what removes ones
- *  stored before the rule existed. */
+ *  stored before the rule existed. Tentative solo holds and 1:1s are kept (owner 2026-11-20). */
 async function applyIgnoreList(supabaseClient: any, connection: any, rows: any[]): Promise<any[]> {
-  const { data: pref } = await supabaseClient.from('user_scheduling_prefs')
-    .select('config').eq('user_id', connection.user_id).maybeSingle();
-  const rules = resolveIgnoreRules(pref?.config);
+  const rules = await loadIgnoreRules(supabaseClient, connection.user_id);
   if (!rules.phrases.length && !rules.tentative) return rows;
   const kept = rows.filter((r) => !isIgnoredCalendarEvent(r, rules));
-  if (kept.length !== rows.length) console.log(`[calendar-delta-sync] Ignored ${rows.length - kept.length} event(s) (titles: ${rules.phrases.join(', ') || 'none'}; tentative: ${rules.tentative})`);
+  if (kept.length !== rows.length) console.log(`[calendar-delta-sync] Ignored ${rows.length - kept.length} event(s) (titles: ${rules.phrases.join(', ') || 'none'}; tentative groups: ${rules.tentative})`);
   for (const p of rules.phrases) {
     const { error } = await supabaseClient.from('external_calendar_events').delete()
       .eq('connection_id', connection.id).is('source_task_id', null).ilike('title', `%${p.replace(/[%_]/g, '')}%`);
     if (error) console.warn('[calendar-delta-sync] ignore-list purge failed:', error.message);
   }
-  if (rules.tentative) {
-    const { error } = await supabaseClient.from('external_calendar_events').delete()
-      .eq('connection_id', connection.id).is('source_task_id', null).eq('show_as', 'tentative');
-    if (error) console.warn('[calendar-delta-sync] tentative purge failed:', error.message);
-  }
+  if (rules.tentative) await purgeTentativeGroups(supabaseClient, connection, rules);
   return kept;
 }
 
@@ -369,6 +381,7 @@ async function syncOutlookDelta(
     });
 
     const keptOutlook = await applyIgnoreList(supabaseClient, connection, eventsToUpsert);
+    const outlookTodayChanged = await detectTodayChange(supabaseClient, connection, keptOutlook);
     const { error: upsertError, data: upsertData } = await supabaseClient
       .from('external_calendar_events')
       .upsert(keptOutlook, {
@@ -381,6 +394,7 @@ async function syncOutlookDelta(
       console.error('[calendar-delta-sync] Error upserting events:', upsertError);
     } else {
       result.events_added = allEvents.length;
+      if (outlookTodayChanged) result.today_changed = true;
     }
   }
 
@@ -584,6 +598,7 @@ async function syncGoogleDelta(
     }));
 
     const keptGoogle = await applyIgnoreList(supabaseClient, connection, eventsToUpsert);
+    const googleTodayChanged = await detectTodayChange(supabaseClient, connection, keptGoogle);
     const { error: upsertError } = await supabaseClient
       .from('external_calendar_events')
       .upsert(keptGoogle, {
@@ -593,6 +608,7 @@ async function syncGoogleDelta(
 
     if (!upsertError) {
       result.events_added = allEvents.length;
+      if (googleTodayChanged) result.today_changed = true;
     }
   }
 
