@@ -176,8 +176,17 @@ export interface FeedEventRow {
   is_recurring: boolean;
   attendees: unknown[];
   show_as: string | null;
+  /** Outlook category NAMES as sent (e.g. "Purple category"); [] when none. Read by calendar-ignore.ts. */
+  categories: string[];
   organizer_email: string | null;
   last_synced_at: string;
+}
+
+/** Pure: the record's `categories` (an array of name strings, measured 2026-11-22) -> string names only.
+ *  Anything that is not an array becomes [] (kept, never guessed at). */
+export function feedCategories(rec: Record<string, unknown>): string[] {
+  const raw = rec.categories;
+  return Array.isArray(raw) ? raw.filter((c): c is string => typeof c === "string" && !!c.trim()) : [];
 }
 
 /**
@@ -213,6 +222,7 @@ export function mapFeedEventRows(
       is_recurring: !!str(r.recurrence) && str(r.recurrence).toLowerCase() !== "none",
       attendees: feedAttendees(r),
       show_as: showAs,
+      categories: feedCategories(r),
       organizer_email: parseAddress(r.organizer).address || null,
       last_synced_at: nowIso,
     });

@@ -19,6 +19,13 @@
 // constant TENTATIVE_GROUP_MIN_OTHERS below. Editable switch: config.calendarIgnoreTentative (boolean),
 // absent = true. Availability is Graph showAs / Google transparency, normalized to `show_as`.
 // SUPERSEDES the 2026-11-19 blanket rule (every tentative event ignored).
+//
+// CATEGORIES (owner 2026-11-22: "ignore a category with purple being the category to turn on for ignoring now").
+// Outlook categories are NAMES ("Purple category" is Outlook's default name for the purple colour). Editable:
+// config.calendarIgnoreCategories (a list of names). Absent or malformed = [] -- nothing ignored by category,
+// so a bad value can only KEEP meetings. Matching is EXACT name equality after trim + case-fold (never a
+// substring, unlike titles), and an event is ignored if ANY of its categories is listed. Independent of the
+// tentative switch. Measured source: huddle-extension-app run 44970672964 (feed: 254 records, 132 Purple).
 
 import { otherPeople, type MeetingRow } from './meetings.ts';
 import { resolveOwnerEmails } from './digest-source-meetings.ts';
@@ -47,9 +54,29 @@ export function resolveIgnoreTentative(userConfig: any): boolean {
  *  1 = a 1:1 -- both kept. Owner-decided default 2026-11-20; change it here only. */
 export const TENTATIVE_GROUP_MIN_OTHERS = 2;
 
+/** Category names to ignore, trimmed + lower-cased. Non-strings and blanks dropped; malformed = []. */
+export function resolveIgnoreCategories(userConfig: any): string[] {
+  const raw = userConfig?.calendarIgnoreCategories;
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.filter((c: unknown) => typeof c === 'string' && c.trim()).map((c: string) => c.trim().toLowerCase()))];
+}
+
+/** Does any of the event's category names exactly equal a listed one (trim + case-fold)? Non-array = none. */
+export function hasIgnoredCategory(categories: unknown, ignored: readonly string[]): boolean {
+  if (!ignored.length || !Array.isArray(categories)) return false;
+  return categories.some((c) => typeof c === 'string' && ignored.includes(c.trim().toLowerCase()));
+}
+
+/** Pure: a row's categories as stored -- string names only, as sent; anything else becomes []. */
+export function normalizeCategories(raw: unknown): string[] {
+  return Array.isArray(raw) ? raw.filter((c): c is string => typeof c === 'string' && !!c.trim()) : [];
+}
+
 export interface CalendarIgnoreRules {
   phrases: string[];
   tentative: boolean;
+  /** Category names, lower-cased. [] = the category rule is off. */
+  categories?: string[];
   /** The owner's own addresses, so the owner is never counted as "another person". */
   ownerEmails: string[];
 }
@@ -58,6 +85,7 @@ export function resolveIgnoreRules(userConfig: any, ownerEmails: Iterable<string
   return {
     phrases: resolveIgnoreTitles(userConfig),
     tentative: resolveIgnoreTentative(userConfig),
+    categories: resolveIgnoreCategories(userConfig),
     ownerEmails: [...new Set([...ownerEmails].map((e) => String(e ?? '').trim().toLowerCase()).filter(Boolean))],
   };
 }
@@ -71,12 +99,18 @@ export function isTentativeGroup(
   return otherPeople(row as unknown as MeetingRow, ownerEmails).length >= TENTATIVE_GROUP_MIN_OTHERS;
 }
 
-/** THE one ignore decision for a stored-calendar row: a title phrase, or a tentative GROUP invite. */
+/** Any rule switched on? A writer may skip the filter entirely only when this is false. */
+export function hasAnyIgnoreRule(rules: CalendarIgnoreRules): boolean {
+  return rules.phrases.length > 0 || rules.tentative || (rules.categories ?? []).length > 0;
+}
+
+/** THE one ignore decision for a stored-calendar row: a title phrase, a listed category, or a tentative GROUP invite. */
 export function isIgnoredCalendarEvent(
-  row: { title?: unknown; show_as?: unknown; attendees?: unknown },
+  row: { title?: unknown; show_as?: unknown; attendees?: unknown; categories?: unknown },
   rules: CalendarIgnoreRules,
 ): boolean {
   if (isIgnoredEvent(row?.title, rules.phrases)) return true;
+  if (hasIgnoredCategory(row?.categories, rules.categories ?? [])) return true;
   return rules.tentative && isTentativeGroup(row, rules.ownerEmails ?? []);
 }
 
@@ -109,4 +143,29 @@ export async function purgeTentativeGroups(supabaseClient: any, connection: { id
   const { error } = await supabaseClient.from('external_calendar_events').delete().in('id', groupIds);
   if (error) { console.warn('[calendar-ignore] tentative purge failed:', error.message); return 0; }
   return groupIds.length;
+}
+
+/** Delete already-stored rows on this connection that the CURRENT rules ignore, by id. Covers an event that was
+ *  stored, then tagged with an ignored category (its new copy is dropped before the upsert, so the stored copy
+ *  must be removed by its external id), and rows stored before the rule existed (matched on the stored
+ *  `categories`). TaskOS-created rows (source_task_id set) are never touched. Non-fatal: returns the count. */
+// deno-lint-ignore no-explicit-any
+export async function purgeIgnoredCategoryRows(supabaseClient: any, connection: { id: string }, rules: CalendarIgnoreRules, droppedExternalIds: string[] = []): Promise<number> {
+  const cats = rules.categories ?? [];
+  if (!cats.length) return 0;
+  const ids = new Set<string>();
+  if (droppedExternalIds.length) {
+    const { data, error } = await supabaseClient.from('external_calendar_events').select('id')
+      .eq('connection_id', connection.id).is('source_task_id', null).in('external_event_id', droppedExternalIds);
+    if (error) console.warn('[calendar-ignore] dropped-row select failed:', error.message);
+    for (const r of data ?? []) ids.add(r.id);
+  }
+  const { data: tagged, error: tagErr } = await supabaseClient.from('external_calendar_events').select('id, categories')
+    .eq('connection_id', connection.id).is('source_task_id', null).not('categories', 'is', null);
+  if (tagErr) console.warn('[calendar-ignore] category select failed:', tagErr.message);
+  for (const r of tagged ?? []) if (hasIgnoredCategory(r.categories, cats)) ids.add(r.id);
+  if (!ids.size) return 0;
+  const { error } = await supabaseClient.from('external_calendar_events').delete().in('id', [...ids]);
+  if (error) { console.warn('[calendar-ignore] category purge failed:', error.message); return 0; }
+  return ids.size;
 }

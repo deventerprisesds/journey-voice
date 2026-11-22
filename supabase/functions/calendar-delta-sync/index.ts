@@ -1,4 +1,4 @@
-import { loadIgnoreRules, isIgnoredCalendarEvent, purgeTentativeGroups } from '../_shared/calendar-ignore.ts';
+import { loadIgnoreRules, isIgnoredCalendarEvent, purgeTentativeGroups, hasAnyIgnoreRule, normalizeCategories, purgeIgnoredCategoryRows } from '../_shared/calendar-ignore.ts';
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { normalizeAttendees, normalizeShowAs } from '../_shared/meetings.ts';
@@ -191,20 +191,27 @@ serve(async (req) => {
   }
 });
 
-/** Owner-ignored calendar events ("Work Block" titles, tentative GROUP invites): dropped before storing, and
- *  purged if already stored. A delta run only re-sends CHANGED events, so the purge is what removes ones
- *  stored before the rule existed. Tentative solo holds and 1:1s are kept (owner 2026-11-20). */
+/** Owner-ignored calendar events ("Work Block" titles, listed Outlook categories, tentative GROUP invites):
+ *  dropped before storing, and purged if already stored. A delta run only re-sends CHANGED events, so the purge
+ *  is what removes ones stored before the rule existed. Tentative solo holds and 1:1s are kept (owner
+ *  2026-11-20). A row dropped for its category is ALSO deleted by its external id: an event tagged Purple after
+ *  it was stored has an untagged stored copy that no column match would find (2026-11-22). */
 async function applyIgnoreList(supabaseClient: any, connection: any, rows: any[]): Promise<any[]> {
   const rules = await loadIgnoreRules(supabaseClient, connection.user_id);
-  if (!rules.phrases.length && !rules.tentative) return rows;
+  if (!hasAnyIgnoreRule(rules)) return rows;
   const kept = rows.filter((r) => !isIgnoredCalendarEvent(r, rules));
-  if (kept.length !== rows.length) console.log(`[calendar-delta-sync] Ignored ${rows.length - kept.length} event(s) (titles: ${rules.phrases.join(', ') || 'none'}; tentative groups: ${rules.tentative})`);
+  if (kept.length !== rows.length) console.log(`[calendar-delta-sync] Ignored ${rows.length - kept.length} event(s) (titles: ${rules.phrases.join(', ') || 'none'}; categories: ${(rules.categories ?? []).join(', ') || 'none'}; tentative groups: ${rules.tentative})`);
   for (const p of rules.phrases) {
     const { error } = await supabaseClient.from('external_calendar_events').delete()
       .eq('connection_id', connection.id).is('source_task_id', null).ilike('title', `%${p.replace(/[%_]/g, '')}%`);
     if (error) console.warn('[calendar-delta-sync] ignore-list purge failed:', error.message);
   }
   if (rules.tentative) await purgeTentativeGroups(supabaseClient, connection, rules);
+  if ((rules.categories ?? []).length) {
+    const keptIds = new Set(kept.map((r) => r.external_event_id));
+    const dropped = rows.filter((r) => r.external_event_id && !keptIds.has(r.external_event_id)).map((r) => r.external_event_id);
+    await purgeIgnoredCategoryRows(supabaseClient, connection, rules, dropped);
+  }
   return kept;
 }
 
@@ -235,7 +242,7 @@ async function syncOutlookDelta(
     console.log(`[calendar-delta-sync] Using delta token for Outlook connection ${connection.id}`);
   } else {
     // Initial sync - get all events in range (include seriesMasterId for recurring occurrences)
-    url = `https://graph.microsoft.com/v1.0/me/calendarView/delta?startDateTime=${startDate.toISOString()}&endDateTime=${endDate.toISOString()}&$select=id,subject,body,start,end,isAllDay,location,showAs,seriesMasterId,attendees,organizer`;
+    url = `https://graph.microsoft.com/v1.0/me/calendarView/delta?startDateTime=${startDate.toISOString()}&endDateTime=${endDate.toISOString()}&$select=id,subject,body,start,end,isAllDay,location,showAs,seriesMasterId,attendees,organizer,categories`;
     console.log(`[calendar-delta-sync] Initial sync for Outlook connection ${connection.id}`);
   }
 
@@ -375,6 +382,8 @@ async function syncOutlookDelta(
         // because the owner organizes their own solo holds (AC-MTG-2).
         attendees: normalizeAttendees(event, 'outlook'),
         show_as: normalizeShowAs(event, 'outlook'),
+        // Outlook category NAMES ("Purple category"); read by the ignore rule (_shared/calendar-ignore.ts).
+        categories: normalizeCategories(event.categories),
         organizer_email: event.organizer?.emailAddress?.address?.toLowerCase() || null,
         last_synced_at: new Date().toISOString()
       };
@@ -593,6 +602,7 @@ async function syncGoogleDelta(
       // With-a-person capture -- same shape as the Outlook path above.
       attendees: normalizeAttendees(event, 'google'),
       show_as: normalizeShowAs(event, 'google'),
+      categories: [], // Google has no categories (it uses colours)
       organizer_email: event.organizer?.email?.toLowerCase() || null,
       last_synced_at: new Date().toISOString()
     }));
