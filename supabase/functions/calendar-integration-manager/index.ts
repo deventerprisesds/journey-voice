@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { loadIgnoreRules, isIgnoredCalendarEvent } from '../_shared/calendar-ignore.ts';
+import { loadIgnoreRules, isIgnoredCalendarEvent, normalizeCategories } from '../_shared/calendar-ignore.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { normalizeAttendees, normalizeShowAs, type NormalizedAttendee, type ShowAs } from '../_shared/meetings.ts';
 
@@ -20,6 +20,8 @@ interface CalendarEvent {
   // With-a-person capture -- same normalized shape the delta-sync path writes.
   attendees: NormalizedAttendee[];
   show_as: ShowAs | null;
+  /** Outlook category NAMES; [] for Google (no categories). Read by the ignore rule. */
+  categories: string[];
   organizer_email: string | null;
 }
 
@@ -192,11 +194,13 @@ async function syncCalendarEvents(supabaseClient: any, connectionId: string, sta
     start_time: event.start_time, end_time: event.end_time, is_all_day: event.is_all_day,
     location: event.location, calendar_id: event.calendar_id,
     attendees: event.attendees, show_as: event.show_as,
+    categories: event.categories ?? [],
     organizer_email: event.organizer_email,
     last_synced_at: new Date().toISOString(),
   }));
 
-  // Same owner ignore list as every other calendar write path ("work block" titles, tentative GROUP invites).
+  // Same owner ignore list as every other calendar write path ("work block" titles, listed Outlook categories,
+  // tentative GROUP invites).
   const ignore = await loadIgnoreRules(supabaseClient, connection.user_id);
   const keptEvents = eventsToInsert.filter((r: any) => !isIgnoredCalendarEvent(r, ignore));
 
@@ -278,6 +282,7 @@ async function fetchGoogleCalendarEvents(connection: any, startDate: string, end
     is_all_day: !event.start.dateTime, location: event.location, calendar_id: 'primary',
     // Google's events.list already returns `attendees` on the wire -- it was being dropped.
     attendees: normalizeAttendees(event, 'google'),
+    categories: [], // Google has no categories
     show_as: normalizeShowAs(event, 'google'),
     organizer_email: event.organizer?.email?.toLowerCase() || null,
   })) || [];
@@ -299,6 +304,7 @@ async function fetchOutlookCalendarEvents(connection: any, startDate: string, en
     is_all_day: event.isAllDay, location: event.location?.displayName, calendar_id: 'primary',
     attendees: normalizeAttendees(event, 'outlook'),
     show_as: normalizeShowAs(event, 'outlook'),
+    categories: normalizeCategories(event.categories),
     organizer_email: event.organizer?.emailAddress?.address?.toLowerCase() || null,
   })) || [];
 }

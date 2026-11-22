@@ -96,12 +96,12 @@ export async function syncFeedCalendar(
     // A rejected snapshot changes NOTHING: the rows already stored are the last good copy.
     if (!v.ok) return { status: `rejected:${v.reason}` };
 
-    // Owner-ignored events ("work block" titles, tentative GROUP invites) are never stored; already-stored
+    // Owner-ignored events ("work block" titles, listed Outlook categories, tentative GROUP invites) are never stored; already-stored
     // ones fall out as stale below. The work mailbox is the owner too: without it the owner would count as
     // "another person" in his own work invites and a tentative 1:1 would look like a group.
     const ignore = await loadIgnoreRules(supabase, connection.user_id, [cfg.mailbox, cfg.driveAccount]);
     const rows = mapFeedEventRows(v.records, cfg, connection, new Date(nowMs).toISOString())
-      .filter((r: { title?: string | null; show_as?: string | null; attendees?: unknown }) => !isIgnoredCalendarEvent(r, ignore));
+      .filter((r: { title?: string | null; show_as?: string | null; attendees?: unknown; categories?: unknown }) => !isIgnoredCalendarEvent(r, ignore));
     const todayChanged = await detectTodayChange(supabase, connection, rows, nowMs);
     if (rows.length) {
       const { error } = await supabase

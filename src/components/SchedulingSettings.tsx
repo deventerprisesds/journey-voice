@@ -20,6 +20,7 @@ import ActivitiesSettings from '@/components/ActivitiesSettings';
 import ConflictRulesSettings from '@/components/ConflictRulesSettings';
 import { TIMEZONE_OPTIONS, getBrowserTimezone, formatTimezoneWithOffset } from '@/lib/timezone';
 import { CATEGORY_KEYS, CATEGORY_LABELS, toCategoryKey } from '../../supabase/functions/_shared/categories.ts';
+import { OUTLOOK_DEFAULT_CATEGORIES, cleanCategoryList, isCategoryListed, setCategory, addCategories } from '@/utils/calendarIgnoreCategories';
 
 // Keyword-rule lane Select. A lane that names a category gates the keyword to that category's tasks;
 // any other stored lane (e.g. `flexible`) applies to all tasks and shows as "No category".
@@ -549,6 +550,7 @@ const SchedulingSettings: React.FC = () => {
           <CardDescription>
             Events whose title contains any of these phrases are not imported, not shown, and never block time.
             Separate phrases with commas. Tentative group invites (two or more other people) are ignored; your own holds and 1:1s stay. Untick the box to keep every tentative event.
+            An event with ANY ticked Outlook category below is also not imported, not shown, and never blocks time (Google events have no categories).
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -568,6 +570,41 @@ const SchedulingSettings: React.FC = () => {
             />
             Also ignore Tentative group invites (two or more other people); your own holds and 1:1s stay
           </label>
+          <div className="mt-4 space-y-2">
+            <p className="text-sm font-medium">Also ignore events in these Outlook categories</p>
+            <div className="flex flex-wrap gap-x-4 gap-y-2">
+              {[...OUTLOOK_DEFAULT_CATEGORIES, ...cleanCategoryList(config.calendarIgnoreCategories).filter(
+                (c) => !OUTLOOK_DEFAULT_CATEGORIES.some((d) => d.toLowerCase() === c.toLowerCase()),
+              )].map((name) => (
+                <label key={name} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={isCategoryListed(config.calendarIgnoreCategories, name)}
+                    onChange={(e) =>
+                      setConfig({ ...config, calendarIgnoreCategories: setCategory(config.calendarIgnoreCategories, name, e.target.checked) })
+                    }
+                  />
+                  {name}
+                </label>
+              ))}
+            </div>
+            <Input
+              placeholder="Add a category name (renamed or custom), then press Enter"
+              // A typed name is kept even without Enter: leaving the box adds it (verifier finding 2026-11-23).
+              onBlur={(e) => {
+                if (!e.currentTarget.value.trim()) return;
+                setConfig({ ...config, calendarIgnoreCategories: addCategories(config.calendarIgnoreCategories, e.currentTarget.value) });
+                e.currentTarget.value = '';
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                const el = e.currentTarget;
+                setConfig({ ...config, calendarIgnoreCategories: addCategories(config.calendarIgnoreCategories, el.value) });
+                el.value = '';
+              }}
+            />
+          </div>
         </CardContent>
       </Card>
 
