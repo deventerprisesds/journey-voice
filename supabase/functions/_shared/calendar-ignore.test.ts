@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-import { isIgnoredEvent, resolveIgnoreTitles, resolveIgnoreRules, isIgnoredCalendarEvent, isTentativeGroup, purgeTentativeGroups, loadIgnoreRules, TENTATIVE_GROUP_MIN_OTHERS, resolveIgnoreCategories, hasIgnoredCategory, hasAnyIgnoreRule, normalizeCategories, purgeIgnoredCategoryRows } from './calendar-ignore.ts';
+import { isIgnoredEvent, resolveIgnoreTitles, resolveIgnoreRules, isIgnoredCalendarEvent, isTentativeGroup, purgeTentativeGroups, loadIgnoreRules, TENTATIVE_GROUP_MIN_OTHERS, resolveIgnoreCategories, hasIgnoredCategory, hasAnyIgnoreRule, normalizeCategories, purgeIgnoredCategoryRows, droppedExternalIds } from './calendar-ignore.ts';
 
 describe('ignored calendar events', () => {
   it('CI-1 every spelling seen in the data is ignored; real meetings are not', () => {
@@ -238,7 +238,13 @@ describe('ignore by Outlook category', () => {
     assert.match(src, /categories: \[\], \/\/ Google has no categories/);
     assert.match(src, /if \(!hasAnyIgnoreRule\(rules\)\) return rows;/);
     assert.doesNotMatch(src, /if \(!rules\.phrases\.length && !rules\.tentative\) return rows;/);
-    assert.match(src, /await purgeIgnoredCategoryRows\(supabaseClient, connection, rules, dropped\);/);
+    assert.match(src, /await purgeIgnoredCategoryRows\(supabaseClient, connection, rules, droppedExternalIds\(rows, kept\)\);/);
+  });
+  it('CC-11 only DROPPED ids are purged by external id, never kept ones (verifier finding 2026-11-23)', () => {
+    const rows = [{ external_event_id: 'KEEP' }, { external_event_id: 'DROP' }, { external_event_id: null }, {}];
+    assert.deepEqual(droppedExternalIds(rows, [rows[0]]), ['DROP']);
+    assert.deepEqual(droppedExternalIds(rows, rows), []);
+    assert.deepEqual(droppedExternalIds([], []), []);
   });
   it('CC-10 AC-27/28 the integration manager carries categories (Outlook) and [] (Google) onto the row it filters', () => {
     const src = readFileSync(new URL('../calendar-integration-manager/index.ts', import.meta.url), 'utf8');

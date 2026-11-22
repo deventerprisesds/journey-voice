@@ -145,6 +145,14 @@ export async function purgeTentativeGroups(supabaseClient: any, connection: { id
   return groupIds.length;
 }
 
+/** Pure: external ids of the rows the ignore rule DROPPED (present in `rows`, absent from `kept`). These are the
+ *  ids whose stored copies must be deleted -- never the kept ones (a flipped test here would delete every
+ *  stored event on the connection; verifier 2026-11-23). */
+export function droppedExternalIds(rows: { external_event_id?: string | null }[], kept: { external_event_id?: string | null }[]): string[] {
+  const keptIds = new Set(kept.map((r) => r.external_event_id));
+  return rows.map((r) => r.external_event_id).filter((id): id is string => !!id && !keptIds.has(id));
+}
+
 /** Delete already-stored rows on this connection that the CURRENT rules ignore, by id. Covers an event that was
  *  stored, then tagged with an ignored category (its new copy is dropped before the upsert, so the stored copy
  *  must be removed by its external id), and rows stored before the rule existed (matched on the stored
