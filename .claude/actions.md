@@ -754,3 +754,9 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 - **Evidence:** run-tests 718/718; calendar-ignore 9/9; mutate.sh FIRED (control EQUIVALENT) CI-6 x2, CI-9. Deploy Supabase Functions success (all functions: `_shared` changed).
 - **Live:** calendar-delta-sync triggered via pg_net (request 1012651, 200): owner's stored tentative events 37 → 0; 63 busy feed events kept.
 - **Open:** the Settings checkbox reaches the web app when Lovable publishes `main`. NOT owner-confirmed.
+
+## ACT:timecard-nag — weekly time-card reminder, hourly until submitted (2026-11-22) — DESIGN ONLY, nothing built
+Owner: *"receive a chat and email starting 7pm on friday evening respecting quiet time settings and starting again saturday morning through saturday at 8pm reminding me every hour after dismissed until confirmed submitted... if i click submitted, it stops."*
+- **Fact-finding (origin/main journey `1d3a53d8`, huddle `0e31ec69`, bridge `577e3df`):** already there: task-linked phone alarm with Done (bridge `NotificationEngine.kt:229-244`); reminders cancel themselves when the task is DONE (huddle `reminders.ts:185-193`); chat close-out (`reminders.ts:278-313`); journey quiet hours (`reminder-rules.ts:34`, owner 22:00-06:00 America/New_York in `notification_prefs`); digest-style weekday clock (`digest-content.ts:665` `shouldSendAtLocalHour(..., weekday)`); digest email channel (`digest-delivery.ts`). Missing: a recurring TASK, repeat hourly until DONE, plus quiet hours and email on Huddle reminders.
+- **Corrected claim:** I first said "no recurrence exists". It was wrong (one-file grep). Logged in `.claude/accuracy-log.md`, PR #140 (open, CI green, NOT merged).
+- **Open: owner decisions pending:** (1) engine A = TaskOS/journey (recommended) or B = Huddle; (2) Saturday start 6am or 8am (recommended); (3) keep the "Done" label (recommended) or relabel it "Submitted" (needs an APK rebuild); (4) go/skip on building; (5) merge #140.
