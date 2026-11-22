@@ -590,6 +590,12 @@ const SchedulingSettings: React.FC = () => {
             </div>
             <Input
               placeholder="Add a category name (renamed or custom), then press Enter"
+              // A typed name is kept even without Enter: leaving the box adds it (verifier finding 2026-11-23).
+              onBlur={(e) => {
+                if (!e.currentTarget.value.trim()) return;
+                setConfig({ ...config, calendarIgnoreCategories: addCategories(config.calendarIgnoreCategories, e.currentTarget.value) });
+                e.currentTarget.value = '';
+              }}
               onKeyDown={(e) => {
                 if (e.key !== 'Enter') return;
                 e.preventDefault();

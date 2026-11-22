@@ -1,4 +1,4 @@
-import { loadIgnoreRules, isIgnoredCalendarEvent, purgeTentativeGroups, hasAnyIgnoreRule, normalizeCategories, purgeIgnoredCategoryRows } from '../_shared/calendar-ignore.ts';
+import { loadIgnoreRules, isIgnoredCalendarEvent, purgeTentativeGroups, hasAnyIgnoreRule, normalizeCategories, purgeIgnoredCategoryRows, droppedExternalIds } from '../_shared/calendar-ignore.ts';
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { normalizeAttendees, normalizeShowAs } from '../_shared/meetings.ts';
@@ -208,9 +208,7 @@ async function applyIgnoreList(supabaseClient: any, connection: any, rows: any[]
   }
   if (rules.tentative) await purgeTentativeGroups(supabaseClient, connection, rules);
   if ((rules.categories ?? []).length) {
-    const keptIds = new Set(kept.map((r) => r.external_event_id));
-    const dropped = rows.filter((r) => r.external_event_id && !keptIds.has(r.external_event_id)).map((r) => r.external_event_id);
-    await purgeIgnoredCategoryRows(supabaseClient, connection, rules, dropped);
+    await purgeIgnoredCategoryRows(supabaseClient, connection, rules, droppedExternalIds(rows, kept));
   }
   return kept;
 }
