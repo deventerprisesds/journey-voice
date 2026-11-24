@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-import { isIgnoredEvent, resolveIgnoreTitles, resolveIgnoreRules, isIgnoredCalendarEvent, isTentativeGroup, purgeTentativeGroups, loadIgnoreRules, TENTATIVE_GROUP_MIN_OTHERS } from './calendar-ignore.ts';
+import { isIgnoredEvent, resolveIgnoreTitles, resolveIgnoreRules, isIgnoredCalendarEvent, isTentativeGroup, purgeTentativeGroups, loadIgnoreRules, TENTATIVE_GROUP_MIN_OTHERS, resolveIgnoreCategories, hasIgnoredCategory, hasAnyIgnoreRule, normalizeCategories, purgeIgnoredCategoryRows, droppedExternalIds } from './calendar-ignore.ts';
 
 describe('ignored calendar events', () => {
   it('CI-1 every spelling seen in the data is ignored; real meetings are not', () => {
@@ -30,7 +30,7 @@ describe('ignored calendar events', () => {
 describe('every calendar write path applies the ignore list', () => {
   it('CI-4 the OneDrive feed filters before it stores, with the work mailbox counted as the owner', () => {
     const src = readFileSync(new URL('./onedrive-feed-sync.ts', import.meta.url), 'utf8');
-    assert.match(src, /const ignore = await loadIgnoreRules\(supabase, connection\.user_id, \[cfg\.mailbox, cfg\.driveAccount\]\);\n\s*const rows = mapFeedEventRows\([^\n]*\)\n\s*\.filter\(\(r: \{ title\?: string \| null; show_as\?: string \| null; attendees\?: unknown \}\) => !isIgnoredCalendarEvent\(r, ignore\)\);/);
+    assert.match(src, /const ignore = await loadIgnoreRules\(supabase, connection\.user_id, \[cfg\.mailbox, cfg\.driveAccount\]\);\n\s*const rows = mapFeedEventRows\([^\n]*\)\n\s*\.filter\(\(r: \{ title\?: string \| null; show_as\?: string \| null; attendees\?: unknown; categories\?: unknown \}\) => !isIgnoredCalendarEvent\(r, ignore\)\);/);
   });
   it('CI-5 no other file stores external calendar events without the ignore list', () => {
     // Every file that upserts external_calendar_events must be listed here AND apply the ignore list.
@@ -131,5 +131,125 @@ describe('only tentative GROUP invites are ignored', () => {
     assert.match(src, /const kept = rows\.filter\(\(r\) => !isIgnoredCalendarEvent\(r, rules\)\);/);
     assert.match(src, /if \(rules\.tentative\) await purgeTentativeGroups\(supabaseClient, connection, rules\);/);
     assert.doesNotMatch(src, /\.delete\(\)[^;]*\.eq\('show_as', 'tentative'\)/);
+  });
+});
+
+// Owner 2026-11-22: "ignore a category with purple being the category to turn on for ignoring now".
+// Spelling table: .claude/ac-calendar-ignore-categories.md S-1..S-18. Exact name match after trim + case-fold.
+describe('ignore by Outlook category', () => {
+  const PURPLE = resolveIgnoreRules({ calendarIgnoreCategories: ['Purple category'] });
+  const busy = (categories: unknown, title = 'Sprint Review') => ({ title, show_as: 'busy', categories });
+  it('CC-1 AC-1 resolves to trimmed lower-case names; titles/tentative/owners unchanged', () => {
+    const before = resolveIgnoreRules({}, ['o@x.com']);
+    const after = resolveIgnoreRules({ calendarIgnoreCategories: ['Purple category'] }, ['o@x.com']);
+    assert.deepEqual(after.categories, ['purple category']);
+    assert.deepEqual([after.phrases, after.tentative, after.ownerEmails], [before.phrases, before.tentative, before.ownerEmails]);
+  });
+  it('CC-2 AC-2/3 malformed config ignores NOTHING by category; junk entries dropped, never coerced', () => {
+    for (const v of [undefined, null, 'Purple category', 3, {}]) assert.deepEqual(resolveIgnoreCategories({ calendarIgnoreCategories: v }), [], String(v));
+    assert.deepEqual(resolveIgnoreCategories({ calendarIgnoreCategories: [' Purple category ', '', '   ', 3, null, {}] }), ['purple category']);
+    assert.deepEqual(resolveIgnoreCategories(null), []);
+  });
+  it('CC-3 spelling table S-1..S-18', () => {
+    const rows: [string, unknown, unknown, boolean][] = [
+      ['S-1', ['Purple category'], PURPLE, true],
+      ['S-2', ['purple CATEGORY'], PURPLE, true],
+      ['S-3', [' Purple category '], PURPLE, true],
+      ['S-4', ['Blue category', 'Purple category'], PURPLE, true],
+      ['S-5', ['Blue category'], PURPLE, false],
+      ['S-6', ['Purple'], PURPLE, false],
+      ['S-7', ['Dark Purple category'], PURPLE, false],
+      ['S-8', ['Purple category 2'], PURPLE, false],
+      ['S-9a', [''], PURPLE, false],
+      ['S-9b', ['   '], PURPLE, false],
+      ['S-10a', null, PURPLE, false],
+      ['S-10b', undefined, PURPLE, false],
+      ['S-10c', [], PURPLE, false],
+      ['S-11', 'Purple category', PURPLE, false],
+      ['S-12', [7, null, {}], PURPLE, false],
+      ['S-14', ['Purple category'], resolveIgnoreRules({ calendarIgnoreCategories: ['purple category'] }), true],
+      ['S-15', ['Purple category'], resolveIgnoreRules({ calendarIgnoreCategories: [] }), false],
+      ['S-16', ['Purple category'], resolveIgnoreRules({ calendarIgnoreCategories: 'Purple category' }), false],
+      ['S-18', ['Purple Category'], PURPLE, true],
+      ['AC-9', ['Purple categoryX'], PURPLE, false],
+      ['AC-10', ['  PURPLE CATEGORY  '], PURPLE, true],
+    ];
+    for (const [id, cats, rules, want] of rows) assert.equal(isIgnoredCalendarEvent(busy(cats), rules as never), want, id);
+    // S-13 / AC-8: the title never feeds the category rule.
+    assert.equal(isIgnoredCalendarEvent(busy([], 'Purple category review'), PURPLE), false, 'S-13');
+  });
+  it('CC-4 AC-6 / S-17 the tentative switch OFF does not turn the category rule off', () => {
+    const rules = resolveIgnoreRules({ calendarIgnoreTentative: false, calendarIgnoreCategories: ['Purple category'] });
+    assert.equal(rules.tentative, false);
+    assert.equal(isIgnoredCalendarEvent(busy(['Purple category']), rules), true);
+    const grp = [{ email: 'a@x.com' }, { email: 'b@x.com' }];
+    assert.equal(isIgnoredCalendarEvent({ title: 'Retro', show_as: 'tentative', attendees: grp, categories: ['Purple category'] }, rules), true);
+  });
+  it('CC-5 AC-22 a writer may skip filtering only when NO rule is on (categories count)', () => {
+    assert.equal(hasAnyIgnoreRule({ phrases: [], tentative: false, categories: ['purple category'], ownerEmails: [] }), true);
+    assert.equal(hasAnyIgnoreRule({ phrases: [], tentative: false, categories: [], ownerEmails: [] }), false);
+    assert.equal(hasAnyIgnoreRule({ phrases: [], tentative: false, ownerEmails: [] }), false);
+  });
+  it('CC-6 normalizeCategories keeps string names only', () => {
+    assert.deepEqual(normalizeCategories(['Purple category', 3, '', null]), ['Purple category']);
+    assert.deepEqual(normalizeCategories('Purple category'), []);
+    assert.equal(hasIgnoredCategory(['Purple category'], []), false);
+  });
+  it('CC-7 AC-23/24 purge deletes by id: dropped external ids AND stored rows carrying a listed category; never TaskOS rows', async () => {
+    const calls: { op: string; arg?: unknown }[] = [];
+    const q = (rows: unknown[]) => {
+      const b: Record<string, unknown> = {};
+      for (const m of ['eq', 'is', 'not']) b[m] = (...a: unknown[]) => { calls.push({ op: m, arg: a }); return b; };
+      b.in = (...a: unknown[]) => { calls.push({ op: 'in', arg: a }); return b; };
+      b.then = (r: (v: unknown) => void) => r({ data: rows, error: null });
+      return b;
+    };
+    let selects = 0;
+    const client = {
+      from: () => ({
+        select: (cols: string) => { selects++; return cols === 'id' ? q([{ id: 'stored-retagged' }]) : q([
+          { id: 'old-purple', categories: ['Purple category'] }, { id: 'blue', categories: ['Blue category'] }, { id: 'odd', categories: 'Purple category' },
+        ]); },
+        delete: () => ({ in: async (c: string, ids: unknown) => { calls.push({ op: 'delete', arg: [c, ids] }); return { error: null }; } }),
+      }),
+    };
+    const n = await purgeIgnoredCategoryRows(client, { id: 'c1' }, PURPLE, ['EXT-1']);
+    assert.equal(n, 2);
+    assert.deepEqual(calls.filter((c) => c.op === 'delete'), [{ op: 'delete', arg: ['id', ['stored-retagged', 'old-purple']] }]);
+    assert.ok(calls.filter((c) => c.op === 'is').every((c) => JSON.stringify(c.arg) === '["source_task_id",null]'));
+    assert.equal(calls.filter((c) => c.op === 'is').length, 2, 'both selects exclude TaskOS-created rows');
+    assert.ok(calls.some((c) => c.op === 'in' && JSON.stringify(c.arg) === '["external_event_id",["EXT-1"]]'));
+    assert.equal(selects, 2);
+    // Rule off -> no reads, no deletes.
+    assert.equal(await purgeIgnoredCategoryRows(client, { id: 'c1' }, resolveIgnoreRules({}), ['EXT-1']), 0);
+    assert.equal(selects, 2);
+  });
+  it('CC-8 AC-26 a failing purge is non-fatal', async () => {
+    const b: Record<string, unknown> = {};
+    for (const m of ['eq', 'is', 'not', 'in']) b[m] = () => b;
+    b.then = (r: (v: unknown) => void) => r({ data: [{ id: 'x', categories: ['Purple category'] }], error: null });
+    const client = { from: () => ({ select: () => b, delete: () => ({ in: async () => ({ error: { message: 'boom' } }) }) }) };
+    assert.equal(await purgeIgnoredCategoryRows(client, { id: 'c1' }, PURPLE, []), 0);
+  });
+  it('CC-9 AC-19/21/22/23/25 delta-sync requests, stores and enforces categories on both providers', () => {
+    const src = readFileSync(new URL('../calendar-delta-sync/index.ts', import.meta.url), 'utf8');
+    assert.match(src, /\$select=id,subject,body,start,end,isAllDay,location,showAs,seriesMasterId,attendees,organizer,categories`/);
+    assert.match(src, /categories: normalizeCategories\(event\.categories\),/);
+    assert.match(src, /categories: \[\], \/\/ Google has no categories/);
+    assert.match(src, /if \(!hasAnyIgnoreRule\(rules\)\) return rows;/);
+    assert.doesNotMatch(src, /if \(!rules\.phrases\.length && !rules\.tentative\) return rows;/);
+    assert.match(src, /await purgeIgnoredCategoryRows\(supabaseClient, connection, rules, droppedExternalIds\(rows, kept\)\);/);
+  });
+  it('CC-11 only DROPPED ids are purged by external id, never kept ones (verifier finding 2026-11-23)', () => {
+    const rows = [{ external_event_id: 'KEEP' }, { external_event_id: 'DROP' }, { external_event_id: null }, {}];
+    assert.deepEqual(droppedExternalIds(rows, [rows[0]]), ['DROP']);
+    assert.deepEqual(droppedExternalIds(rows, rows), []);
+    assert.deepEqual(droppedExternalIds([], []), []);
+  });
+  it('CC-10 AC-27/28 the integration manager carries categories (Outlook) and [] (Google) onto the row it filters', () => {
+    const src = readFileSync(new URL('../calendar-integration-manager/index.ts', import.meta.url), 'utf8');
+    assert.match(src, /categories: event\.categories \?\? \[\],/);
+    assert.match(src, /categories: normalizeCategories\(event\.categories\),/);
+    assert.match(src, /categories: \[\], \/\/ Google has no categories/);
   });
 });

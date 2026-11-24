@@ -557,3 +557,10 @@ hurt something upstream or downstream and that we know the original intent and c
 certainty."* A plan I had put forward twice as "recommended, reversible, nothing would move" was
 refuted by taking that demand seriously. The downstream half checked out; the upstream half did not,
 and no amount of re-reading my own reasoning would have found it.
+
+## 2026-11-22 — "No recurring tasks or reminders exist in either app"
+- **Claim:** journey and Huddle have no recurrence, so a weekly time-card nag needs a new weekly engine.
+- **Ground truth:** recurrence exists in five places: Activities (`_shared/activities.ts`: days of week, every N weeks), scheduled calls (`user_scheduling_prefs.scheduled_calls`), ceremonies (`ceremony_occurrences.days_of_week`), digests (hourly `notification-scheduler-job` + `shouldSendAtLocalHour(now, tz, hour, weekday)`, daily 8am / weekly Sunday 9am), and Huddle `scheduling-config` job cadences (groom Mondays only). What is truly absent is a recurring TASK with a repeat-until-done reminder.
+- **Source that would have settled it:** `information_schema.columns` for recur/days/schedule columns + `cron.job` + a repo-wide grep, not a grep of `types.ts` alone.
+- **Pattern:** claimed absence from a single-file grep (the org-wide rule already names this).
+- **Guard implied:** before any "X doesn't exist" answer, run the live-schema + cron + both-repo sweep; the owner's "how do digests work?" was the disconfirming evidence.

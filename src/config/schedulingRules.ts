@@ -126,6 +126,11 @@ export interface SchedulingConfig {
    * Absent = true. Backend contract: supabase/functions/_shared/calendar-ignore.ts (resolveIgnoreTentative).
    */
   calendarIgnoreTentative?: boolean;
+  /**
+   * Outlook category NAMES whose events are ignored everywhere (e.g. "Purple category"). Absent = none.
+   * Exact name match, case-insensitive. Backend contract: supabase/functions/_shared/calendar-ignore.ts.
+   */
+  calendarIgnoreCategories?: string[];
 }
 
 export type ConflictMatch =
@@ -406,6 +411,8 @@ export function mergeSchedulingConfig(
     calendarIgnoreTitles: Array.isArray(userConfig.calendarIgnoreTitles) ? userConfig.calendarIgnoreTitles : undefined,
     // Same pass-through rule; undefined keeps the backend default (ignore tentative) in force.
     calendarIgnoreTentative: typeof userConfig.calendarIgnoreTentative === 'boolean' ? userConfig.calendarIgnoreTentative : undefined,
+    // Same pass-through rule; undefined = never saved (nothing ignored by category).
+    calendarIgnoreCategories: Array.isArray(userConfig.calendarIgnoreCategories) ? userConfig.calendarIgnoreCategories : undefined,
     nightlySchedule: userConfig.nightlySchedule && typeof userConfig.nightlySchedule === 'object'
       ? { ...userConfig.nightlySchedule }
       : undefined,

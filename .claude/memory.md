@@ -22,6 +22,10 @@ Last updated: 2026-11-19
 - `config.calendarIgnoreCategories` (names, exact match after trim + case-fold) in `_shared/calendar-ignore.ts`; every writer (OneDrive feed, delta-sync, integration-manager) stores `external_calendar_events.categories`. Owner has `["Purple category"]`.
 - The OneDrive snapshot carries `categories` arrays on every record (probe huddle run 44970672964). Outlook delta links never persist (`update_calendar_sync_token` filters on auth.uid(), null under service role), so every delta run is a full sync and new `$select` fields reach all connections.
 - Huddle is NOT covered: its own hardcoded feed rule.
+## Recurrence already exists in 5 forms; NOT a recurring task (2026-11-22, design question, nothing built)
+- Digests: hourly `notification-scheduler-job` plus `shouldSendAtLocalHour(now,tz,hour,weekday)` (daily 8am, weekly Sun 9am). Activities: days/everyNWeeks, busy blocks only, no alerts. Scheduled calls, ceremonies (`days_of_week`), Huddle `scheduling-config` cadences.
+- Absent: a task that recurs, or a reminder that repeats until DONE. Huddle reminders are one-shot, skip quiet hours, and send no email. See ACT:timecard-nag.
+- Hardening: never claim "X doesn't exist" from one file. Sweep `information_schema` + `cron.job` + both repos (accuracy-log 2026-11-22).
 
 ## Done tasks kept on the schedule; Research Paper under-sized; MGT-702 dropped (2026-11-15, #117 merged + deployed; owner NOT yet confirmed)
 - **#117 (e93bcd7, deploy run 43727767655 success):** STEP 1.25 took EVERY scheduled DONE task off the schedule

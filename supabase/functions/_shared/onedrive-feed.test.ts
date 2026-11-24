@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import {
   FEED_CALENDAR_ID,
   feedAttendees,
+  feedCategories,
   isFeedEventId,
   mapFeedEventRows,
   parseTaskosFeedConfig,
@@ -161,7 +162,7 @@ test('C4 attendee strings -> NormalizedAttendee list, de-duplicated, flags kept'
 
 // ------------------------------------------------------------------------------- D: sync (I/O)
 type Call = { op: string; table: string; arg?: unknown; opts?: unknown };
-function mkSupabase(existing: { id: string; external_event_id: string }[], upsertError: unknown = null) {
+function mkSupabase(existing: { id: string; external_event_id: string }[], upsertError: unknown = null, prefsConfig: unknown = null) {
   const calls: Call[] = [];
   const client = {
     from(table: string) {
@@ -170,7 +171,7 @@ function mkSupabase(existing: { id: string; external_event_id: string }[], upser
           calls.push({ op: 'upsert', table, arg: rows, opts });
           return Promise.resolve({ error: upsertError });
         },
-        select(_cols: string) {
+        select(cols: string) {
           const filters: [string, unknown][] = [];
           // Owner-address reads for the ignore list (calendar-ignore.ts loadIgnoreRules -> resolveOwnerEmails).
           // No profile / connection rows here: the feed's own mailbox is what marks the owner.
@@ -194,8 +195,8 @@ function mkSupabase(existing: { id: string; external_event_id: string }[], upser
             },
             // user_scheduling_prefs read for the ignore list (calendar-ignore.ts); no saved prefs = seed list.
             maybeSingle() {
-              calls.push({ op: 'prefs', table, arg: filters });
-              return Promise.resolve({ data: null });
+              calls.push({ op: 'prefs', table, arg: filters, opts: cols });
+              return Promise.resolve({ data: prefsConfig ? { config: prefsConfig } : null });
             },
           };
           return b;
@@ -342,4 +343,68 @@ test('D5 missing file -> rejected:missing; oversize -> rejected:too_large; upser
   s = mkSupabase([{ id: 'x', external_event_id: 'feed:work@example.org:OLD' }], { message: 'boom' });
   assert.deepEqual(await syncFeedCalendar(s.client, CONN, mkFetch().f, NOW), { status: 'error' });
   assert.equal(s.calls.some((c) => c.op === 'delete'), false);
+});
+
+// ------------------------------------------------------------------- E: Outlook categories (owner 2026-11-22)
+// "ignore a category with purple being the category to turn on for ignoring now". Measured source: the live
+// snapshot carries `categories` (array of names) on every record; 132 of 254 are "Purple category".
+test('E1 AC-13/14 the mapper carries category NAMES as sent; anything malformed becomes []', () => {
+  const map = (categories: unknown) => mapFeedEventRows([rec({ categories })], cfg, { id: 'c', user_id: 'u' }, 'n')[0].categories;
+  assert.deepEqual(map(['Purple category', 'Blue category']), ['Purple category', 'Blue category']);
+  for (const bad of [undefined, [], null, 'Purple category', 7, {}]) assert.deepEqual(map(bad), [], JSON.stringify(bad));
+  assert.deepEqual(map([1, null, 'Green category', '  ']), ['Green category']);
+  assert.deepEqual(feedCategories(rec({ categories: ['Red category'] })), ['Red category']);
+});
+
+test('E2 AC-15/16 Purple ticked (tentative switch OFF): Purple rows are never stored; already-stored ones are removed', async () => {
+  const existing = [
+    { id: 'row-a', external_event_id: 'feed:work@example.org:A' },
+    { id: 'row-b', external_event_id: 'feed:work@example.org:B' },
+  ];
+  const prefs = { calendarIgnoreCategories: ['Purple category'], calendarIgnoreTentative: false };
+  const { client, calls } = mkSupabase(existing, null, prefs);
+  const recs = [
+    rec({ id: 'A', subject: 'Standup', categories: ['Purple category'] }),
+    rec({ id: 'B', subject: 'Review', categories: ['Blue category', 'Purple category'] }),
+    rec({ id: 'C', subject: 'Planning', categories: ['Blue category'] }),
+  ];
+  const { f } = mkFetch({ fileBody: JSON.stringify(envelope({}, recs)) });
+  const r = await syncFeedCalendar(client, CONN, f, NOW);
+  assert.equal(r.status, 'ok');
+  const up = calls.find((c) => c.op === 'upsert')!;
+  assert.deepEqual((up.arg as Array<{ external_event_id: string }>).map((x) => x.external_event_id), ['feed:work@example.org:C']);
+  const del = calls.find((c) => c.op === 'delete')!;
+  assert.deepEqual(del.arg, { col: 'id', ids: ['row-a', 'row-b'] });
+  assert.equal((r as { removed: number }).removed, 2);
+});
+
+test('E3 AC-17 unticking Purple brings the events back with no data repair', async () => {
+  const { client, calls } = mkSupabase([], null, { calendarIgnoreCategories: [] });
+  const recs = [rec({ id: 'A', categories: ['Purple category'] }), rec({ id: 'C', categories: ['Blue category'] })];
+  const { f } = mkFetch({ fileBody: JSON.stringify(envelope({}, recs)) });
+  assert.equal((await syncFeedCalendar(client, CONN, f, NOW)).status, 'ok');
+  const up = calls.find((c) => c.op === 'upsert')!;
+  assert.equal((up.arg as unknown[]).length, 2);
+});
+
+test('E4 AC-18 a rejected snapshot changes nothing even with the category rule on', async () => {
+  const { client, calls } = mkSupabase([{ id: 'row-a', external_event_id: 'feed:work@example.org:A' }], null, { calendarIgnoreCategories: ['Purple category'] });
+  const { f } = mkFetch({ fileBody: JSON.stringify(envelope({ mailbox: 'other@example.org' }, [rec({ categories: ['Purple category'] })])) });
+  const r = await syncFeedCalendar(client, CONN, f, NOW);
+  assert.match(r.status, /^rejected:/);
+  assert.ok(!calls.some((c) => c.op === 'upsert' || c.op === 'delete'));
+});
+
+test('E5 AC-39 999 records x 3 categories: map + filter under 50 ms, rules loaded once per sync', async () => {
+  const many = Array.from({ length: 999 }, (_, i) => rec({ id: `R${i}`, categories: ['Red category', i % 2 ? 'Purple category' : 'Blue category', 'Green category'] }));
+  const { client, calls } = mkSupabase([], null, { calendarIgnoreCategories: ['Purple category', 'Teal', 'X', 'Y', 'Z', 'W'] });
+  const t0 = performance.now();
+  const rows = mapFeedEventRows(many, cfg, { id: 'c', user_id: 'u' }, 'n');
+  assert.equal(rows.length, 999);
+  assert.ok(performance.now() - t0 < 50, 'map under 50 ms');
+  const { f } = mkFetch({ fileBody: JSON.stringify(envelope({}, many)) });
+  assert.equal((await syncFeedCalendar(client, CONN, f, NOW)).status, 'ok');
+  // The ignore rules (`config`) are read once; the separate `timezone` read is calendar-today-change's own.
+  assert.equal(calls.filter((c) => c.op === 'prefs' && c.opts === 'config').length, 1);
+  assert.equal(((calls.find((c) => c.op === 'upsert')!.arg) as unknown[]).length, 500);
 });
