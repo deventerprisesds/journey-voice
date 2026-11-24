@@ -37,7 +37,7 @@ async function bundleHasCategoryCard({ page, check }) {
     }
   }
   check(`T0 live bundle contains '${CAT_HEADING}'`, !!found,
-    found ? `found in ${found} (scanned ${seen.size} JS files on ${origin})` : `NOT in any of ${seen.size} JS files on ${origin} -- #130's Settings change is not published yet`);
+    found ? `found in ${found} (scanned ${seen.size} JS files on ${origin})` : `NOT in any of ${seen.size} JS files on ${origin} -- #140's Settings card is not published yet (publish from Lovable)`);
 }
 
 async function signIn({ page, check }) {
