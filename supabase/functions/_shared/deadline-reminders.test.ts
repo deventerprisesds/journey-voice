@@ -152,6 +152,12 @@ test('S-13..S-17, S-20: 5=Fri, 6=Sat, 0=Sun, "5" accepted, [5,5] deduped', () =>
 test('S-16, S-18, S-19: 7, 5.5 and [] are rejected', () => {
   for (const d of [[7], [5.5], [], [-1], ['x']]) assert.equal(daysOf(d).field, 'days', JSON.stringify(d));
 });
+test('S-11 for days (verifier loop 1 #5): null, booleans, objects, "5.5", blank and NaN are rejected, never coerced', () => {
+  for (const d of [[null], [true], [false], [{}], [[5]], ['5.5'], [' '], [''], [NaN], [undefined], ['05x']]) {
+    assert.equal(daysOf(d).field, 'days', JSON.stringify(d));
+  }
+  assert.deepEqual(daysOf([' 5 ']).item!.days, [5]);
+});
 test('S-21 / AC-T1: Fri 19:00 EST is 2026-11-28T00:00Z (a UTC Saturday) and counts as FRIDAY', () => {
   const now = new Date('2026-11-28T00:05:00Z');
   const occ = liveOccurrence(timeCard(), now, NY)!;

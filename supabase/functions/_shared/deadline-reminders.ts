@@ -121,8 +121,9 @@ export function normalizeDeadlineReminder(input: any, now: Date = new Date()): N
   const rawDays = Array.isArray(input?.days) ? input.days : [];
   const days: number[] = [];
   for (const d of rawDays) {
-    if (typeof d === 'string' && d.trim() === '') return { error: 'Day is not a weekday', field: 'days' };
-    const n = Number(d);
+    // Only a number, or a string of one digit ("5", S-17). Number(null)=0 and Number(true)=1 would otherwise
+    // pass as Sunday / Monday (verifier loop 1, defect 5).
+    const n = typeof d === 'number' ? d : typeof d === 'string' && /^\d$/.test(d.trim()) ? Number(d.trim()) : NaN;
     // Integers 0..6 only: 7 is not Sunday (S-16) and 5.5 is not a day (S-18).
     if (!Number.isInteger(n) || n < 0 || n > 6) return { error: 'Day must be a weekday (Sun..Sat)', field: 'days' };
     if (!days.includes(n)) days.push(n);
