@@ -2,7 +2,7 @@
 //             resolved ignore rules, with `expected` PRODUCED by journey's own isIgnoredCalendarEvent.
 // WHY:        Owner 2026-11-26 option A: Huddle applies the SAME ignore decision as TaskOS. The fixture is copied
 //             byte-for-byte into huddle-extension-app (scripts/fixtures/) and both repos test against it, so a rule
-//             change mirrored in only one repo fails a suite (huddle .claude/ac-huddle-calendar-ignore.md AC-23/24).
+//             change mirrored in only one repo fails a suite (AC-23/24 in huddle-extension-app .claude/ac-huddle-calendar-ignore.md).
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   supabase/functions/_shared/calendar-ignore-parity.test.ts (journey side of the check).
 // Run (from the repo root):
