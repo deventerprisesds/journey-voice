@@ -125,3 +125,21 @@ Built in an isolated agent worktree (the scratchpad clone was refused by the wor
    `task_read_failed` and inserts nothing; every other notification is unaffected).
 2. Merge -> edge functions auto-deploy (notification-scheduler, notification-delivery) and the SWA build.
 3. Owner confirms on the phone (full-screen alarm with Done) and in the inbox (G11).
+4. Since chunk 5 the owner must SAVE the Deadline reminders card once (the time card is shown as a starting
+   example) -- that save is what switches the nag on.
+
+## Chunk 5 — scheduler acts only on a SAVED list (coordinator decision 2026-11-26)
+- SUPERSEDES the "Seed parity with Activities" decision above, and R1's "a user with NO key gets the seed".
+  `deadline-reminders-run.ts` now reads `config.deadlineReminders` directly: absent, null or not an array ->
+  return before any task query, so zero tasks and zero nag rows. Array entries that are not objects with
+  id+name are reported (`invalid_item:shape`) and skipped. The scheduler no longer calls `resolveDeadlineReminders`.
+- Settings is unchanged: with nothing saved the card still shows the time card as a starting example
+  (`resolveDeadlineReminders`, same as Activities), and saving the card stores it.
+- Tests: the run-module double now defaults to a SAVED time-card list; new tests "saved-only: NO saved key ->
+  zero tasks and zero nag rows" ({}, {activities:[]}, null, undefined config), "saved-only: a MALFORMED saved
+  key" (object, string, number, boolean) and "saved-only: a SAVED list -> nags". The module test pinning the
+  seed now names it a Settings starting example (AC-S2/S3 unchanged in substance).
+- Mutations: M20 (scheduler falls back to the seed when nothing is saved) -> FIRED (control EQUIVALENT) on
+  "saved-only: NO saved". M21 (seed fallback for a malformed, non-array key) -> FIRED (control EQUIVALENT)
+  on "saved-only: a MALFORMED".
+- `node scripts/run-tests.mjs`: **832 / 832**. H11 trigger left unchanged.
