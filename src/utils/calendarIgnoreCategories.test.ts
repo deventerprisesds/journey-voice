@@ -45,4 +45,6 @@ test('CAT-6 AC-29 the Settings loader passes the stored list through (undefined 
   const ui = readFileSync(new URL('../components/SchedulingSettings.tsx', import.meta.url), 'utf8');
   assert.match(ui, /calendarIgnoreCategories: setCategory\(config\.calendarIgnoreCategories, name, e\.target\.checked\)/);
   assert.match(ui, /calendarIgnoreCategories: addCategories\(config\.calendarIgnoreCategories, el\.value\)/);
+  // A name typed without Enter is kept when the box loses focus (verifier loop 2: nothing pinned it).
+  assert.match(ui, /onBlur=\{\(e\) => \{\n\s*if \(!e\.currentTarget\.value\.trim\(\)\) return;\n\s*setConfig\(\{ \.\.\.config, calendarIgnoreCategories: addCategories\(config\.calendarIgnoreCategories, e\.currentTarget\.value\) \}\);/);
 });
