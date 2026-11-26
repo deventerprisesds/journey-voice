@@ -11,6 +11,7 @@ import { mintCaller } from "../_shared/push-auth.ts";
 import { runDedup, finalizeDedup, undoDedupSkips, type DedupLogEntry } from "../_shared/task-dedup.ts";
 import { updateCalendarEvent, deleteCalendarEvent, makeSupabaseCalendarEditDeps } from "../_shared/calendar-edit.ts";
 import { rebuildSchedule, makeRebuildDeps } from "../_shared/rebuild-schedule.ts";
+import { loadIgnoreRules } from "../_shared/calendar-ignore.ts";
 
 // ── Rollback Flag for shared topic ranking ──────────────────────────
 const USE_SHARED_TOPICS = true;
@@ -3018,6 +3019,23 @@ async function getMyConfig(supabase: any, userId: string, args: any): Promise<Ex
   };
 
   try {
+    // NARROW section for Huddle (huddle-extension-app .claude/ac-huddle-calendar-ignore.md AC-1/AC-2): the owner's
+    // calendar-ignore rules, ALREADY RESOLVED by the one rule module (_shared/calendar-ignore.ts loadIgnoreRules),
+    // so Huddle applies the same decision TaskOS makes and keeps no copy of the settings. Returns ONLY these four
+    // fields -- never full_config's call history, topics or notifications. Additive: no other section changes.
+    if (section === 'calendar_ignore') {
+      const rules = await loadIgnoreRules(supabase, userId);
+      return {
+        success: true,
+        result: {
+          phrases: rules.phrases,
+          tentative: rules.tentative,
+          categories: rules.categories ?? [],
+          ownerEmails: rules.ownerEmails,
+        },
+        extractedFacts: { type: 'other' as const },
+      };
+    }
     if (section === 'full_config') {
       const [prefs, history, topics, notifPrefs, calendars, pending, profile] = await Promise.all([
         fetchScheduledCalls(),
