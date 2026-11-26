@@ -1,5 +1,5 @@
 # Project Memory — journey-voice
-Last updated: 2026-11-19
+Last updated: 2026-11-26
 
 > **MOVE THE DATE ABOVE IN THE SAME COMMIT THAT APPENDS A SECTION.** It read `2026-09-21` while
 > this file already carried sections dated 2026-10-08 and 2026-10-12 — three weeks of the header
@@ -15,6 +15,12 @@ Last updated: 2026-11-19
 
 
 
+
+## Deadline reminders + Huddle follows TaskOS calendar-ignore (#142, #143, huddle #300, 2026-11-26; LIVE, owner NOT yet confirmed)
+- **Deadline reminders (#143):** `config.deadlineReminders` list (own Settings card beside Activities). Pure rules `_shared/deadline-reminders.ts` (reuses Activities' `occursOn`/`parseClockTime`); per-user run `_shared/deadline-reminders-run.ts` acts ONLY on a saved list, one task per occurrence keyed by `tasks.deadline_reminder_ref` (`<itemId>@<start date>`). Delivery type `deadline_reminder` = full-screen alarm with Done, exempt from the "ancient" drop, per-item email (bypasses the global EMAIL channel) + chat. Owner's time card saved 2026-11-26 19:10 UTC (Fri 19:00 -> Sat 20:00, hourly, not before 08:00). First slot Fri 2026-11-27 19:00 ET; check scheduled 19:06 ET.
+- **Trap (H11, unchanged):** `schedule_task_reminders` trigger also sends "Task Due Soon/Now" for the occurrence task and deletes a task's undelivered notification rows on every task update (one hour's nag can be lost if the task is edited in the minute before delivery).
+- **Huddle calendar (#142 + huddle #300):** Huddle no longer has its own ignore rule; it reads the owner's TaskOS settings via `get_my_config` section `calendar_ignore` (huddle-proxy, no new secret), 60 s cache, 5 s timeout, fallback = journey's DEFAULT rule. Categories/attendees are used for the decision and stripped from events agents see. Parity fixture shared byte-for-byte (sha256) by both repos.
+- **"Action needed" emails -> tasks: blocked.** `/automation/email/emails.json` carries no `categories` (0/278, probe run 45784833302). Needs the owner's flow to write it; then extend Huddle correspondence -> proposals.
 
 - [2026-11-19] Calendar ignore list now also drops TENTATIVE events (show_as) — `_shared/calendar-ignore.ts` isIgnoredCalendarEvent; config.calendarIgnoreTentative (default on). AC-MTG-7 superseded for stored calendar. #130. NOT owner-confirmed.
 - [2026-11-20] SUPERSEDES the line above (branch `claude_tentative-group-only`, NOT merged/deployed): tentative is ignored only for GROUP invites (>= `TENTATIVE_GROUP_MIN_OTHERS`=2 other people via meetings.ts otherPeople; `attendees:[]` kept). Delta-sync purge is targeted by id (`purgeTentativeGroups`). New: 15-min `calendar-delta-sync-job` cron (migration 20261120120000, NOT applied) and a today-change single-day rebuild (`calendar-today-change.ts` + `kickCalendarChangeRebuild`, triggerSource `calendar_change`). Evidence: docs/qc-evidence/BUILD-tentative-group-only.md.
