@@ -1,9 +1,10 @@
 // WHAT:       journey half of the TaskOS<->Huddle calendar-ignore parity check: journey's isIgnoredCalendarEvent
 //             must still produce every `expected` verdict in the shared fixture, and the fixture's bytes must
-//             match the sha256 pinned here (the SAME sha256 is pinned in huddle-extension-app
-//             scripts/calendar-ignore-parity.test.ts).
+//             match the sha256 pinned here (the SAME sha256 is pinned in Huddle's parity test,
+//             huddle-extension-app scripts/calendar-ignore-parity.test.ts).
 // WHY:        Owner 2026-11-26 option A: Huddle applies the same decision as TaskOS. A journey rule change that is
-//             not mirrored in Huddle must fail a suite, never neither (huddle .claude/ac-huddle-calendar-ignore.md AC-24).
+//             not mirrored in Huddle must fail a suite, never neither (AC-24 in
+//             huddle-extension-app .claude/ac-huddle-calendar-ignore.md).
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   scripts/calendar-ignore-parity-gen.ts generated the fixture.
 // Run: node --experimental-strip-types --no-warnings --test supabase/functions/_shared/calendar-ignore-parity.test.ts
