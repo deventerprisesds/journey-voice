@@ -51,7 +51,7 @@ export const DeadlineRemindersSettings: React.FC<Props> = ({ config, onChange, e
           Things that absolutely must be done by a deadline, every week (your time card). From the start time you get
           a full-screen alarm every hour, plus an email and a chat message if switched on, until the deadline or until
           you tap Done. Quiet hours are respected, and after the first day nothing rings before the "not before" time.
-          {seeded && ' Showing the starting item -- your first change saves it as your own.'}
+          {seeded && ' Below is a starting example, switched off. It starts reminding you once you switch it on and press Save.'}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">

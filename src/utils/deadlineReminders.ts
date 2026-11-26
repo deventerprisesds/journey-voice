@@ -19,9 +19,14 @@ import {
 
 export type { DeadlineReminder };
 
-/** Never saved -> the card shows the seed (the time card); the first edit saves it as the owner's own list. */
+/**
+ * The list the card shows. Never saved -> the time card as a starting example, shown OFF: the scheduler acts
+ * only on a SAVED list, so an On-looking example that an untouched Save never stores would be a trap
+ * (verifier loop 1 #3). Switching it On (or any edit) marks the card edited, and Save then stores the list.
+ */
 export function deadlineRemindersFor(config: any): DeadlineReminder[] {
-  return resolveDeadlineReminders(config);
+  const list = resolveDeadlineReminders(config);
+  return isSeededList(config) ? list.map((r) => ({ ...r, enabled: false })) : list;
 }
 export function isSeededList(config: any): boolean {
   return !Array.isArray(config?.[DEADLINE_REMINDERS_KEY]);

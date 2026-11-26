@@ -24,13 +24,28 @@ import { mergeStoredConfig } from './mergeStoredConfig.ts';
 const src = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
 const NOW = new Date('2026-11-26T12:00:00Z');
 
-test('AC-S2: a never-saved config shows the seeded time card (Fri 19:00 -> Sat 20:00, not before 08:00)', () => {
+test('AC-S2: a never-saved config shows the time card as a starting example, switched OFF (verifier loop 1 #3)', () => {
   const list = deadlineRemindersFor({});
   assert.equal(isSeededList({}), true);
   assert.equal(list.length, 1);
   const r = list[0];
   assert.deepEqual([r.enabled, r.days, r.start, deadlineWeekday(r), r.deadline, r.notBefore, r.email, r.chat, r.everyNWeeks ?? 1],
-    [true, [5], '19:00', 6, '20:00', '08:00', true, true, 1]);
+    [false, [5], '19:00', 6, '20:00', '08:00', true, true, 1]);
+  assert.match(src('../components/DeadlineRemindersSettings.tsx'), /switched off\. It starts reminding you once you switch it on and press Save\./);
+});
+
+test('verifier loop 1 #3: an untouched Save stores nothing; switching the example On is an edit that Save stores ON', () => {
+  const untouched = buildSchedulingSavePayload({ timeWindows: {} } as any, { activities: false, deadlineReminders: false });
+  assert.equal((untouched as any).deadlineReminders, undefined, 'never auto-saved');
+  const shown = deadlineRemindersFor({});
+  const on = patchDeadlineReminder(shown, 'time-card', { enabled: true }, NOW);
+  assert.equal(on[0].enabled, true);
+  assert.equal(on[0].enabledSince, NOW.toISOString());
+  const v = validateDeadlineReminders(on, NOW);
+  assert.ok(v.ok && v.items[0].enabled === true);
+  const page = src('../components/SchedulingSettings.tsx');
+  assert.match(page, /onChange=\{\(deadlineReminders\) => \{ setConfig\(\{ \.\.\.config, deadlineReminders \}\); setDeadlineRemindersEdited\(true\); \}\}/,
+    'any card change (including the On switch) marks the card edited');
 });
 
 test('AC-S3: deleting the seed stores [] and it is not re-added', () => {
