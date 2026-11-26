@@ -89,7 +89,10 @@ test('AC-O1: Fri 19:10 creates ONE occurrence task (due = Sat 20:00 local) and o
 
 test('AC-O2 / AC-N6: three runs in the same hour leave one task and one nag row', async () => {
   const f = fakeDb();
-  for (const now of [FRI_1910, FRI_1940, at('2026-11-28T00:55:00Z')]) await runDeadlineRemindersForUser(f.client, PREFS, now);
+  for (const now of [FRI_1910, FRI_1940, at('2026-11-28T00:55:00Z')]) {
+    const r = await runDeadlineRemindersForUser(f.client, PREFS, now);
+    assert.deepEqual(r.errors, [], 'a repeat run is a quiet no-op, not a duplicate-key error');
+  }
   assert.equal(f.db.tasks.length, 1);
   assert.equal(f.db.scheduled_notifications.length, 1);
   await runDeadlineRemindersForUser(f.client, PREFS, SAT_1005);
@@ -105,6 +108,17 @@ test('AC-O3: a crash right after the task write -> next run reuses it and still 
   await runDeadlineRemindersForUser(f.client, PREFS, at('2026-11-28T01:05:00Z'));
   assert.equal(f.db.tasks.length, 1);
   assert.equal(f.db.scheduled_notifications.length, 1);
+});
+
+test('AC-O2 race: a task the read did not see is refused by the unique key, re-read and reused (no second task)', async () => {
+  // created_at older than the look-back, so the one SELECT misses it -- the same shape as a concurrent run.
+  const f = fakeDb({ tasks: [{ id: 'seen-late', user_id: 'u1', status: 'TODO', created_at: '2020-01-01T00:00:00Z',
+    deadline_reminder_ref: 'time-card@2026-11-27', due_date: '2026-11-29T01:00:00.000Z' }] });
+  const r = await runDeadlineRemindersForUser(f.client, PREFS, FRI_1910);
+  assert.equal(f.db.tasks.length, 1);
+  assert.equal(r.tasksCreated, 0);
+  assert.equal(f.db.scheduled_notifications.length, 1);
+  assert.equal(f.db.scheduled_notifications[0].task_id, 'seen-late');
 });
 
 test('AC-N10 / AC-N11: a DONE occurrence task gets no new task and no nag', async () => {
