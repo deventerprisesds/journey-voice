@@ -231,7 +231,7 @@ test('S-35 / AC-O6 / AC-E6: the occurrence task is matched by ref, never by titl
 });
 
 // ── Seed and list (AC-S2, AC-S3) ───────────────────────────────────────────────────────────────
-test('AC-S2 / AC-S3: a missing key seeds the time card; a stored [] stays empty', () => {
+test('AC-S2 / AC-S3: Settings shows the time card as a starting example for a missing key; a stored [] stays empty', () => {
   const seed = resolveDeadlineReminders({});
   assert.equal(seed.length, 1);
   assert.deepEqual({ ...seed[0] }, {

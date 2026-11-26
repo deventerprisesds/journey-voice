@@ -15,7 +15,7 @@ type Row = Record<string, any>;
 /** Minimal PostgREST-shaped double. Unique keys: tasks(user_id, deadline_reminder_ref), nags(user,task,type,slot). */
 function fakeDb(seed: { config?: any; tasks?: Row[]; failTaskSelectAfterInsert?: boolean } = {}) {
   const db: Record<string, Row[]> = {
-    user_scheduling_prefs: [{ user_id: 'u1', timezone: 'America/New_York', config: seed.config ?? {} }],
+    user_scheduling_prefs: [{ user_id: 'u1', timezone: 'America/New_York', config: 'config' in seed ? seed.config : { deadlineReminders: defaultDeadlineReminders() } }],
     boards: [{ id: 'b1', user_id: 'u1', is_default: true, created_at: '2025-01-01' }],
     tasks: seed.tasks ?? [],
     scheduled_notifications: [],
@@ -182,6 +182,32 @@ test('AC-O8 / AC-N2: an Off item, or a quiet-hours run, inserts no nag (no task 
   const g = fakeDb();
   await runDeadlineRemindersForUser(g.client, PREFS, at('2026-11-28T04:05:00Z')); // Fri 23:05, quiet
   assert.equal(g.db.scheduled_notifications.length, 0);
+});
+
+test('saved-only: NO saved deadlineReminders key -> zero tasks and zero nag rows (the seed never goes live)', async () => {
+  for (const config of [{}, { activities: [] }, null, undefined]) {
+    const f = fakeDb({ config });
+    const r = await runDeadlineRemindersForUser(f.client, PREFS, FRI_1910);
+    assert.equal(f.db.tasks.length, 0, JSON.stringify(config));
+    assert.equal(f.db.scheduled_notifications.length, 0, JSON.stringify(config));
+    assert.deepEqual(f.calls, ['user_scheduling_prefs.select'], 'no task query either');
+    assert.deepEqual(r.errors, []);
+  }
+});
+
+test('saved-only: a MALFORMED saved key (object, string, number) -> zero nag rows', async () => {
+  for (const bad of [{ 0: defaultDeadlineReminders()[0] }, 'time-card', 5, true]) {
+    const f = fakeDb({ config: { deadlineReminders: bad } });
+    await runDeadlineRemindersForUser(f.client, PREFS, FRI_1910);
+    assert.equal(f.db.scheduled_notifications.length + f.db.tasks.length, 0, JSON.stringify(bad));
+  }
+});
+
+test('saved-only: a SAVED list (here the time card the Settings card showed, then saved) -> nags', async () => {
+  const f = fakeDb({ config: { deadlineReminders: defaultDeadlineReminders() } });
+  await runDeadlineRemindersForUser(f.client, PREFS, FRI_1910);
+  assert.equal(f.db.tasks.length, 1);
+  assert.equal(f.db.scheduled_notifications.length, 1);
 });
 
 test('AC-R1: a user whose stored list is empty makes no task query and no write', async () => {

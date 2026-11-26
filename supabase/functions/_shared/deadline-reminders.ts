@@ -78,8 +78,10 @@ export function defaultDeadlineReminders(): DeadlineReminder[] {
 }
 
 /**
- * The list the scheduler and Settings use. A MISSING key gets the seed (same as `resolveActivities`);
- * a stored list, even an empty one, is used as-is and the seed is never re-added (AC-S3).
+ * The list the SETTINGS CARD shows. A MISSING key shows the seed as a starting example (same as
+ * `resolveActivities`), so saving the card stores it; a stored list, even an empty one, is used as-is and
+ * the seed is never re-added (AC-S3). The SCHEDULER never calls this: it acts only on a saved array
+ * (deadline-reminders-run.ts), so the seed never nags an account that never saved a list.
  */
 export function resolveDeadlineReminders(config: any): DeadlineReminder[] {
   const raw = config?.[DEADLINE_REMINDERS_KEY];

@@ -19,7 +19,7 @@ import {
   nagBody,
   normalizeDeadlineReminder,
   pickOccurrenceTask,
-  resolveDeadlineReminders,
+  DEADLINE_REMINDERS_KEY,
   slotVerdict,
   type DeadlineReminder,
   type OccurrenceTaskLite,
@@ -61,9 +61,16 @@ export async function runDeadlineRemindersForUser(
   const tz = prefs.timezone || sched?.timezone || DEFAULT_TIMEZONE;
   const quiet = { timezone: tz, quiet_hours_start: prefs.quiet_hours_start, quiet_hours_end: prefs.quiet_hours_end };
 
+  // The scheduler acts ONLY on a list the owner SAVED. An absent or malformed key means no nags for this
+  // account: the time-card seed is a Settings starting example, never a live reminder for an account that
+  // never saved one (coordinator decision 2026-11-26, superseding the Activities-parity seed).
+  const saved = sched?.config?.[DEADLINE_REMINDERS_KEY];
+  if (!Array.isArray(saved)) return out;
+
   // Only items that still validate can nag: a hand-edited bad row is skipped, never guessed at.
   const items: DeadlineReminder[] = [];
-  for (const raw of resolveDeadlineReminders(sched?.config ?? {})) {
+  for (const raw of saved) {
+    if (!raw || typeof raw !== 'object' || !raw.id || !raw.name) { out.errors.push({ itemId: null, kind: 'invalid_item:shape' }); continue; }
     const { item, error } = normalizeDeadlineReminder(raw, now);
     if (item) items.push({ ...item, id: String(raw.id) });
     else out.errors.push({ itemId: String(raw?.id ?? ''), kind: `invalid_item:${error}` });
