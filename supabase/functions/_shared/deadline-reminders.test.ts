@@ -378,6 +378,17 @@ test('AC-D7 (verifier loop 1 #2): a 207 / success:false email is a failure, and 
   assert.deepEqual(nagDeliveredUpdate(t, ['email_failed'], 'EMAIL: smtp 550'), { delivered_at: t, failure_reason: 'email_failed; EMAIL: smtp 550' });
   assert.deepEqual(nagDeliveredUpdate(t, ['push_failed', 'email_failed'], null), { delivered_at: t, failure_reason: 'push_failed,email_failed' });
 });
+test('G6 (verifier loop 1 #4): a nag-owned start alarm keeps its reason, is counted once, and is not delivered', () => {
+  const src = deliverySrc();
+  const g6 = src.slice(src.indexOf('const nagOwnedStartIds = new Set<string>();'), src.indexOf('const validNotifications'));
+  assert.ok(g6.length > 0);
+  assert.ok(!/unscheduledStartNotifIds\.add\(/.test(g6), 'never merged into the task_unscheduled set');
+  assert.match(g6, /failure_reason: 'deadline_reminder_owns_alarm'/);
+  assert.equal((g6.match(/failed \+= /g) || []).length, 2, 'one count for task_unscheduled, one for the nag-owned skip');
+  assert.match(src, /if \(nagOwnedStartIds\.has\(n\.id\)\) return false;/);
+  assert.match(src, /\.filter\(\(n: any\) => !unscheduledStartNotifIds\.has\(n\.id\) && !nagOwnedStartIds\.has\(n\.id\)\)/);
+});
+
 test('H6 / AC-R3: the scheduler runs the nag pass per user in try/catch, before and apart from the bulk insert', () => {
   const src = schedulerSrc();
   const pass = src.indexOf('await runDeadlineRemindersForUser(');

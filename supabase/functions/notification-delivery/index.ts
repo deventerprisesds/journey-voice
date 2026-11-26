@@ -796,6 +796,9 @@ serve(async (req) => {
             // Deadline reminders G6 / AC-R6: a deadline-reminder occurrence task rings through its hourly
             // nag. If the nightly builder also placed it on the calendar, its START alarm is skipped so the
             // phone never rings twice for it in one hour. Fails open: a lookup error leaves the alarm alone.
+            // Kept apart from unscheduledStartNotifIds so the reason is not relabelled 'task_unscheduled' and the
+            // row is counted in `failed` once (verifier loop 1 #4).
+            const nagOwnedStartIds = new Set<string>();
             const startAlarmTaskIds = batchNotifications
               .filter((n: any) => n.task_id && !unscheduledStartNotifIds.has(n.id)
                 && (n.notification_type === 'task_start_reminder' || n.notification_type === 'task_start_now'))
@@ -818,7 +821,7 @@ serve(async (req) => {
                     .from('scheduled_notifications')
                     .update({ failed_at: new Date().toISOString(), failure_reason: 'deadline_reminder_owns_alarm' })
                     .in('id', shadowed);
-                  for (const id of shadowed) unscheduledStartNotifIds.add(id);
+                  for (const id of shadowed) nagOwnedStartIds.add(id);
                   failed += shadowed.length;
                 }
               } catch (e) {
@@ -836,6 +839,7 @@ serve(async (req) => {
 
             const validNotifications = batchNotifications.filter((n: any) => {
               if (unscheduledStartNotifIds.has(n.id)) return false;
+              if (nagOwnedStartIds.has(n.id)) return false;
               if (n.task_id && completedTaskIds.has(n.task_id)) {
                 console.log(`⏭️ Skipping notification ${n.id} - task ${n.task_id} is completed`);
                 return false;
@@ -849,7 +853,7 @@ serve(async (req) => {
             });
 
             const skippedIds = batchNotifications
-              .filter((n: any) => !unscheduledStartNotifIds.has(n.id))
+              .filter((n: any) => !unscheduledStartNotifIds.has(n.id) && !nagOwnedStartIds.has(n.id))
               .filter((n: any) => n.task_id && (completedTaskIds.has(n.task_id)
                 || (ancientTaskIds.has(n.task_id) && n.notification_type !== DEADLINE_REMINDER_TYPE)))
               .map((n: any) => n.id);
