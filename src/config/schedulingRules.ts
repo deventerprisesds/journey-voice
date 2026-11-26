@@ -10,6 +10,7 @@ import { resolveKeywords } from '@/utils/resolveKeywords';
 // Activities are IMPORTED from the edge-function module, not mirrored: one implementation for the
 // schedulers, the Settings screen and the calendar view, so the three cannot disagree.
 import type { Activity } from '../../supabase/functions/_shared/activities.ts';
+import type { DeadlineReminder } from '../../supabase/functions/_shared/deadline-reminders.ts';
 export type { Activity };
 
 export interface TimeWindow {
@@ -101,6 +102,12 @@ export interface SchedulingConfig {
    * Contract: supabase/functions/_shared/activities.ts.
    */
   activities?: Activity[];
+  /**
+   * DEADLINE REMINDERS (the time card): weekly must-dos that nag hourly until Done or the deadline.
+   * UNDEFINED means "never saved" and the seed applies; [] means the owner removed them all.
+   * Contract: supabase/functions/_shared/deadline-reminders.ts.
+   */
+  deadlineReminders?: DeadlineReminder[];
   /**
    * How strongly a category wins a contested slot (added to the scheduler's score). Owner 2026-11-04:
    * education outranks Ventures. Backend contract: _shared/scheduling-defaults.ts resolveCategoryWeights.
@@ -419,5 +426,7 @@ export function mergeSchedulingConfig(
     // Same pass-through rule — but UNDEFINED when never saved, so the seed keeps applying and a save
     // of an unrelated setting never writes an empty list that would erase lunch.
     activities: Array.isArray(userConfig.activities) ? userConfig.activities : undefined,
+    // Same rule as activities: undefined when never saved (the seed applies), never defaulted to [].
+    deadlineReminders: Array.isArray(userConfig.deadlineReminders) ? userConfig.deadlineReminders : undefined,
   };
 }

@@ -14,6 +14,7 @@ import {
   isTaskBackedEvent,
   calendarReminderWindowEnd,
 } from "./reminder-rules.ts";
+import { runDeadlineRemindersForUser } from "../_shared/deadline-reminders-run.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -95,6 +96,21 @@ serve(async (req) => {
       }
     }
 
+    // Deadline reminders (time-card nag). Runs BEFORE the bulk insert (so a failed bulk
+    // insert cannot cost the nag either) and writes through its OWN per-user,
+    // idempotent statements, so a bad item can never fail another user's digests (H6, AC-R3), and one
+    // user's failure never stops the next user's nag. Failure KINDS are logged, never message text.
+    let deadlineNags = 0;
+    for (const prefs of allPrefs || []) {
+      try {
+        const r = await runDeadlineRemindersForUser(supabaseClient, prefs, now);
+        deadlineNags += r.nagsInserted;
+        if (r.errors.length) console.warn(`[deadline-reminders] user ${prefs.user_id}:`, r.errors.map((e) => e.kind).join(','));
+      } catch (error) {
+        console.error(`[deadline-reminders] user ${prefs.user_id} failed:`, error instanceof Error ? error.name : 'unknown');
+      }
+    }
+
     // Schedule all notifications
     if (notifications.length > 0) {
       const { error: insertError } = await supabaseClient
@@ -115,11 +131,11 @@ serve(async (req) => {
 
     console.log(`Scheduled ${notifications.length} notifications`);
 
-
     return new Response(
       JSON.stringify({ 
         success: true, 
         scheduled: notifications.length,
+        deadlineNags,
         timestamp: now.toISOString()
       }),
       {

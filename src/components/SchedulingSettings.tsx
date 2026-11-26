@@ -17,6 +17,8 @@ import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig, type SchedulingCaveat
 import { Clock, Calendar, TrendingUp, Tag, Key, Target, Plus, X, FileText, Globe, Timer } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import ActivitiesSettings from '@/components/ActivitiesSettings';
+import DeadlineRemindersSettings from '@/components/DeadlineRemindersSettings';
+import { buildSchedulingSavePayload, validateDeadlineReminders, deadlineRemindersFor } from '@/utils/deadlineReminders';
 import ConflictRulesSettings from '@/components/ConflictRulesSettings';
 import { TIMEZONE_OPTIONS, getBrowserTimezone, formatTimezoneWithOffset } from '@/lib/timezone';
 import { CATEGORY_KEYS, CATEGORY_LABELS, toCategoryKey } from '../../supabase/functions/_shared/categories.ts';
@@ -39,6 +41,10 @@ const SchedulingSettings: React.FC = () => {
   // them when they were edited on THIS page, so saving another setting never overwrites an agent's
   // change made while the page was open.
   const [activitiesEdited, setActivitiesEdited] = useState(false);
+  // Deadline reminders get the SAME guard: sent only when edited here, so a stale page never overwrites a
+  // newer list (deadline reminders AC-S9 / H9). The error is the field-level one from the last Save.
+  const [deadlineRemindersEdited, setDeadlineRemindersEdited] = useState(false);
+  const [deadlineError, setDeadlineError] = useState<{ index: number; field: string; error: string } | null>(null);
 
   useEffect(() => {
     if (user?.id) {
@@ -55,6 +61,8 @@ const SchedulingSettings: React.FC = () => {
       const loadedConfig = await loadUserSchedulingConfig(user.id);
       setConfig(loadedConfig);
       setActivitiesEdited(false);
+      setDeadlineRemindersEdited(false);
+      setDeadlineError(null);
     } catch (error) {
       console.error('Failed to load scheduling config:', error);
       toast({
@@ -69,13 +77,26 @@ const SchedulingSettings: React.FC = () => {
 
   const handleSave = async () => {
     if (!user?.id) return;
+    // An invalid deadline reminder blocks the WHOLE save: nothing is written (AC-S8).
+    let toSave = config;
+    if (deadlineRemindersEdited) {
+      const checked = validateDeadlineReminders(deadlineRemindersFor(config));
+      if (!checked.ok) {
+        setDeadlineError(checked);
+        toast({ title: 'Not saved', description: `Deadline reminder "${checked.name}": ${checked.error}`, variant: 'destructive' });
+        return;
+      }
+      setDeadlineError(null);
+      toSave = { ...config, deadlineReminders: checked.items };
+    }
     setSaving(true);
     try {
       const success = await saveUserSchedulingConfig(
         user.id,
-        activitiesEdited ? config : { ...config, activities: undefined },
+        buildSchedulingSavePayload(toSave, { activities: activitiesEdited, deadlineReminders: deadlineRemindersEdited }),
       );
-      if (success) setActivitiesEdited(false);
+      if (success) { setActivitiesEdited(false); setDeadlineRemindersEdited(false); }
+      if (success && deadlineRemindersEdited) setConfig(toSave);
       if (success) {
         toast({
           title: 'Saved',
@@ -450,6 +471,13 @@ const SchedulingSettings: React.FC = () => {
       <ActivitiesSettings
         config={config}
         onChange={(activities) => { setConfig({ ...config, activities }); setActivitiesEdited(true); }}
+      />
+
+      {/* Deadline reminders — hourly alarm + email + chat until Done or the deadline (time card); its own card */}
+      <DeadlineRemindersSettings
+        config={config}
+        error={deadlineError}
+        onChange={(deadlineReminders) => { setConfig({ ...config, deadlineReminders }); setDeadlineRemindersEdited(true); }}
       />
 
       {/* Workload Balance */}
