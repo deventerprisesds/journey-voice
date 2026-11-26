@@ -12,9 +12,12 @@ import { renderBriefingBody, renderBriefingHtml, nextDays } from "./notification
 import { irisWindowRequest } from "./iris-window.ts";
 import { batchLine } from "./batch-line.ts";
 import { localDateToUtcBounds } from "../_shared/timezone.ts";
+import { DEADLINE_REMINDER_TYPE, deliveryChannelsFor, wantsChat } from "../_shared/deadline-reminders.ts";
 
 // Notification types that become the phone's full-screen alarm (channel `calendar_events`).
-const ALARM_TYPES = ['calendar_event_reminder', 'task_start_now', 'task_start_reminder'];
+// `deadline_reminder` (the hourly "time card" nag) is an alarm too, but NOT a task_start_* type, so the
+// unscheduled-start skip below never drops it (deadline reminders H2 / AC-D5).
+const ALARM_TYPES = ['calendar_event_reminder', 'task_start_now', 'task_start_reminder', 'deadline_reminder'];
 // Mirrors src/utils/alarmDeepLink.ts: single-task alarms open that task, others the calendar.
 const alarmDeepLink = (taskId: string | null | undefined) => (taskId ? `/calendar?task=${taskId}` : '/calendar');
 
@@ -790,6 +793,38 @@ serve(async (req) => {
                   && (n.notification_type === 'task_start_reminder' || n.notification_type === 'task_start_now'))
                 .map((n: any) => n.id)
             );
+            // Deadline reminders G6 / AC-R6: a deadline-reminder occurrence task rings through its hourly
+            // nag. If the nightly builder also placed it on the calendar, its START alarm is skipped so the
+            // phone never rings twice for it in one hour. Fails open: a lookup error leaves the alarm alone.
+            const startAlarmTaskIds = batchNotifications
+              .filter((n: any) => n.task_id && !unscheduledStartNotifIds.has(n.id)
+                && (n.notification_type === 'task_start_reminder' || n.notification_type === 'task_start_now'))
+              .map((n: any) => n.task_id);
+            if (startAlarmTaskIds.length > 0) {
+              try {
+                const { data: nagRows } = await supabaseClient
+                  .from('scheduled_notifications')
+                  .select('task_id')
+                  .eq('notification_type', DEADLINE_REMINDER_TYPE)
+                  .in('task_id', startAlarmTaskIds)
+                  .limit(50);
+                const nagTaskIds = new Set((nagRows || []).map((r: any) => r.task_id));
+                const shadowed = batchNotifications
+                  .filter((n: any) => nagTaskIds.has(n.task_id)
+                    && (n.notification_type === 'task_start_reminder' || n.notification_type === 'task_start_now'))
+                  .map((n: any) => n.id);
+                if (shadowed.length > 0) {
+                  await supabaseClient
+                    .from('scheduled_notifications')
+                    .update({ failed_at: new Date().toISOString(), failure_reason: 'deadline_reminder_owns_alarm' })
+                    .in('id', shadowed);
+                  for (const id of shadowed) unscheduledStartNotifIds.add(id);
+                  failed += shadowed.length;
+                }
+              } catch (e) {
+                console.warn('[DELIVERY] deadline-reminder start-alarm check failed (left alarm as is):', e);
+              }
+            }
             if (unscheduledStartNotifIds.size > 0) {
               await supabaseClient
                 .from('scheduled_notifications')
@@ -805,7 +840,8 @@ serve(async (req) => {
                 console.log(`⏭️ Skipping notification ${n.id} - task ${n.task_id} is completed`);
                 return false;
               }
-              if (n.task_id && ancientTaskIds.has(n.task_id)) {
+              // A deadline nag's task is due on the DEADLINE day; never drop it as "ancient" (H1 / AC-D6).
+              if (n.task_id && ancientTaskIds.has(n.task_id) && n.notification_type !== DEADLINE_REMINDER_TYPE) {
                 console.log(`⏭️ Skipping notification ${n.id} - task ${n.task_id} is ancient (overdue, unscheduled)`);
                 return false;
               }
@@ -814,7 +850,8 @@ serve(async (req) => {
 
             const skippedIds = batchNotifications
               .filter((n: any) => !unscheduledStartNotifIds.has(n.id))
-              .filter((n: any) => n.task_id && (completedTaskIds.has(n.task_id) || ancientTaskIds.has(n.task_id)))
+              .filter((n: any) => n.task_id && (completedTaskIds.has(n.task_id)
+                || (ancientTaskIds.has(n.task_id) && n.notification_type !== DEADLINE_REMINDER_TYPE)))
               .map((n: any) => n.id);
 
             if (skippedIds.length > 0) {
@@ -937,9 +974,24 @@ serve(async (req) => {
             console.error(`Push notification failed: ${pushError.message}`);
           }
 
-          const channelsForDelivery = enabledChannels.filter((channel: string) => {
-            return !['PUSH', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel);
-          });
+          // Deadline reminders: the nag's OWN switches pick email/chat (H4, H5); every other type keeps the
+          // global channel filter unchanged (AC-R4). Failure KINDS are recorded on the nag row (AC-D7/D8).
+          const singleRow = batchNotifications.length === 1 ? batchNotifications[0] : null;
+          const isNag = primaryType === DEADLINE_REMINDER_TYPE;
+          const nagFailures: string[] = [];
+          if (isNag && pushError) nagFailures.push('push_failed');
+          if (isNag && singleRow && wantsChat(primaryType, singleRow.metadata)) {
+            try {
+              const { error: chatError } = await supabaseClient.functions.invoke('send-chat-message', {
+                body: { userId, message: `${title}\n\n${body}`, sendPush: false },
+              });
+              if (chatError) nagFailures.push('chat_failed');
+            } catch {
+              nagFailures.push('chat_failed');
+            }
+          }
+
+          const channelsForDelivery = deliveryChannelsFor(primaryType, enabledChannels, singleRow?.metadata);
           
           if (channelsForDelivery.length > 0) {
             const singleTaskId = batchNotifications.length === 1 ? batchNotifications[0].task_id : null;
@@ -1006,10 +1058,11 @@ serve(async (req) => {
 
             if (unifiedError) {
               console.error(`Unified notification failed: ${unifiedError.message}`);
+              if (isNag) nagFailures.push('email_failed');
             }
           }
 
-          if (pushError && enabledChannels.some((channel: string) => ['SLACK', 'EMAIL', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel))) {
+          if (!isNag && pushError && enabledChannels.some((channel: string) => ['SLACK', 'EMAIL', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel))) {
             throw new Error(`All notification delivery methods failed`);
           }
 
@@ -1017,7 +1070,7 @@ serve(async (req) => {
             .from('scheduled_notifications')
             .update({ 
               delivered_at: new Date().toISOString(),
-              failure_reason: null
+              failure_reason: nagFailures.length ? nagFailures.join(',') : null
             })
             .in('id', notificationIds);
 

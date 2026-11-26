@@ -13,7 +13,7 @@
 // EVIDENCE:   docs/qc-evidence/RESTORE-step4-j10.md; run: node --experimental-strip-types --test
 //             supabase/functions/notification-scheduler/reminder-rules.test.ts
 
-import { shouldSendAtLocalHour } from "../_shared/digest-content.ts";
+import { shouldSendAtLocalHour, localClockParts } from "../_shared/digest-content.ts";
 
 /** Overdue reminders fire in the first tick of this hour, LOCAL to the user. */
 export const OVERDUE_REMINDER_LOCAL_HOUR = 9;
@@ -30,19 +30,21 @@ export interface QuietHoursPrefs {
   quiet_hours_end: string | null;
 }
 
-/** Moved verbatim from index.ts (main). Relies on the server clock being UTC, as Supabase's is. */
+/**
+ * Moved from index.ts (main). The local wall clock now comes from `localClockParts` (Intl offset at the
+ * instant) instead of `new Date(now.toLocaleString(...))`, which re-parsed in the PROCESS timezone and so was
+ * only right while the server clock is UTC (H10, deadline reminders AC-T4). Same answer on a UTC server.
+ */
 export function isInQuietHours(now: Date, prefs: QuietHoursPrefs): boolean {
   const userTz = prefs.timezone || 'UTC';
-  const userTime = new Date(now.toLocaleString("en-US", {timeZone: userTz}));
 
   const quietStart = prefs.quiet_hours_start;
   const quietEnd = prefs.quiet_hours_end;
 
   if (!quietStart || !quietEnd) return false;
 
-  const currentHour = userTime.getHours();
-  const currentMinute = userTime.getMinutes();
-  const currentTime = currentHour * 60 + currentMinute;
+  const local = localClockParts(now, userTz);
+  const currentTime = local.hour * 60 + local.minute;
 
   const [startHour, startMinute] = quietStart.split(':').map(Number);
   const [endHour, endMinute] = quietEnd.split(':').map(Number);
