@@ -101,3 +101,27 @@ Built in an isolated agent worktree (the scratchpad clone was refused by the wor
 - `respectQuietHours` and `intervalMinutes` are per-item fields (default true / 60), beyond the spec's minimum.
 - Start alarm vs nag (G6): delivery skips a `task_start_*` alarm for any task that has deadline nag rows
   (failure_reason `deadline_reminder_owns_alarm`); fails open on a lookup error.
+
+## AC status (DONE = implemented AND a test in this repo exercises it; LIVE = only the owner can confirm)
+- S: S1-S11 DONE (helpers + source shape; no browser). S12 DONE for the stored anchor; the card shows the anchor
+  date field (or "the next Fri when saved") rather than a computed "which Friday is on" line -- PARTIAL.
+- O: O1-O8 DONE (pure + stateful double). O9 NOT DONE -- needs a live TaskOS view (LIVE).
+- N: N1-N8, N10-N12, N14 DONE. N9 (Dismiss writes nothing) and N13 (Doing does not stop nags) hold by
+  construction (neither sets DONE; task status is the only stop) but have no test here -- NOT VERIFIED.
+- E: E1, E3, E5, E6 DONE. E2 (deleted item) and E4 (email switched off mid-window) hold by construction (no
+  item = no occurrence; each nag row snapshots the switches when inserted) -- no dedicated test.
+- D: D2, D5, D6, D9 DONE. D1, D3, D4 implemented, LIVE confirmation pending (G11). D7/D8 implemented
+  (failure kinds `push_failed` / `email_failed` / `chat_failed` on the row); source-shape test only.
+- T: T1, T2, T3, T5, T6 DONE. T4 PARTIAL: every new test passes under TZ=America/Los_Angeles; the pre-existing
+  reminder-rules test refuses to run outside UTC by design.
+- R: R2-R4, R6, R7 DONE. R1: a saved EMPTY list makes no task query and no write (tested); a user with NO key
+  gets the seed (see Decisions). R5 CHANGED on purpose: a task_start_* alarm is skipped for a task that has
+  deadline nags (G6); untouched for every other task.
+- P: P3 DONE for the scheduler (one task SELECT per user, tested with 20 items); Settings save time NOT
+  MEASURED. P1, P2 NOT MEASURED (delivery cron cadence not read; inference only).
+
+## Must happen before merge (not done by this session, by instruction)
+1. Apply `supabase/migrations/20261126120000_deadline_reminders.sql` (until then the deadline pass logs
+   `task_read_failed` and inserts nothing; every other notification is unaffected).
+2. Merge -> edge functions auto-deploy (notification-scheduler, notification-delivery) and the SWA build.
+3. Owner confirms on the phone (full-screen alarm with Done) and in the inbox (G11).
