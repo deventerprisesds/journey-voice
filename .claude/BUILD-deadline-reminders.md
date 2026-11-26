@@ -143,3 +143,22 @@ Built in an isolated agent worktree (the scratchpad clone was refused by the wor
   "saved-only: NO saved". M21 (seed fallback for a malformed, non-array key) -> FIRED (control EQUIVALENT)
   on "saved-only: a MALFORMED".
 - `node scripts/run-tests.mjs`: **832 / 832**. H11 trigger left unchanged.
+
+## Chunk 6 — verifier loop 1 (FAIL, 5 defects; `.claude/VERIFY-deadline-reminders-1.md` on `claude_verify-deadline-reminders-1` @ 9494f6f9)
+| # | defect | fix (commit) | test that guards it | mutation (mutate.sh, anchors from files) |
+|---|---|---|---|---|
+| 5 | `days:[null]` = Sunday, `[true]` = Monday (Number coercion) | only a number or a one-digit string is a day; null/booleans/objects/"5.5"/blank -> REJECT (9ceb0b82) | "S-11 for days (verifier loop 1 #5)" | V5 `const n = Number(d)` -> FIRED (control EQUIVALENT) |
+| 1 | AC-D8: push 200 `{delivered:0}` (all sends failed / no subscription) not recorded | `nagPushFailed(pushError, pushData)`: error OR `delivered === 0` -> `push_failed`; delivery now reads `pushData` (5acf48e8) | "AC-D8 (verifier loop 1 #1)" + delivery source shape | V1 helper ignores delivered:0 -> FIRED (control EQUIVALENT); V1b delivery back to `pushError` only -> FIRED (control EQUIVALENT) |
+| 2 | AC-D7: email 207 treated as success; delivered update nulled the reason send-unified-notification stored | `nagEmailFailed` (error, `success:false`, or `outcome !== 'success'`) -> `email_failed`; `nagDeliveredUpdate` leaves `failure_reason` out when nothing failed and puts the kinds IN FRONT of the stored reason when something did (re-read of that row) (5acf48e8, same commit as #1) | "AC-D7 (verifier loop 1 #2)" | V2 207 not a failure -> FIRED (control EQUIVALENT); V2b writes `failure_reason: null` -> FIRED (control EQUIVALENT) |
+| 4 | G6-skipped start alarms relabelled `task_unscheduled` and counted twice | own set `nagOwnedStartIds`; excluded from delivery and from the ancient/completed skip list; never added to `unscheduledStartNotifIds` (5b5c05cf) | "G6 (verifier loop 1 #4)" (source shape) | V4 also add to `unscheduledStartNotifIds` -> FIRED (control EQUIVALENT) |
+| 3 | Settings trap: unsaved example looked On, an untouched Save stored nothing, it never fired | with nothing saved the card shows the time card OFF, with "a starting example, switched off. It starts reminding you once you switch it on and press Save."; switching it On (any edit) marks the card edited; an untouched Save still stores nothing (f6adaabc) | "AC-S2 ... switched OFF" and "verifier loop 1 #3: an untouched Save stores nothing; switching ... On is an edit Save stores ON" | V3 example shown with its seeded `enabled:true` -> FIRED (control EQUIVALENT) |
+- Non-nag types unchanged: their delivered update is still `{ delivered_at, failure_reason: null }` (source-shape pinned), and the throw and channel filter keep their old conditions.
+- Fixes #1 and #2 landed in ONE commit (5acf48e8) rather than one each, because they share the new helpers and the delivered-row update.
+- CORRECTION to H11 above (verifier C-H11): migrations show notification-scheduler on `0 * * * *` (hourly) and
+  delivery on `* * * * *`. So there is NO second scheduler run in the same hour. If the task is edited between
+  the :00 insert and the next-minute delivery, the trigger deletes that hour's pending nag and it is lost (the
+  next nag is the following hour). Narrow window; still left as is.
+- Open risk (verifier C-tz-source, not fixed): the run uses `notification_prefs.timezone` first (column default
+  'UTC') and only then `user_scheduling_prefs.timezone`, the same source the digests use. If the owner's
+  notification_prefs row says 'UTC' every nag lands 5 hours early. Not checked live (no DB access).
+- `node scripts/run-tests.mjs`: **837 / 837**.
