@@ -52,3 +52,52 @@ Built in an isolated agent worktree (the scratchpad clone was refused by the wor
   syntax checked with `ts.transpileModule` only. No browser run.
 - Tests: 825 total (UTC). Under TZ=America/Los_Angeles every new test passes; the one failure is
   `notification-scheduler/reminder-rules.test.ts`'s own pre-existing "run with TZ=UTC" guard (on main too).
+
+## Chunk 4 — wiring guards, mutation proofs
+- Added source-shape guards for delivery (H1 ancient exemption x2, channel split, chat, failure kinds, no
+  throw for a nag) and the scheduler (nag pass per user in try/catch, before and apart from the bulk insert).
+- Added a race test (a task the one SELECT missed is refused by the unique key, re-read, reused) and made the
+  repeat-run test assert zero duplicate-key errors.
+- FINAL: `node scripts/run-tests.mjs` = **829 / 829** (765 baseline + 64 new). Floors in scripts/run-tests.mjs
+  were not raised (src >= 2, supabase/functions >= 1 are far below the real counts; nothing required it).
+
+### Mutation results (`mutate.sh`, anchors/replacements from files; each FIRED was controlled)
+| id | file | guard (test that must fail) | result |
+|---|---|---|---|
+| M01 | _shared/deadline-reminders.ts | per-item email switch (AC-D3) | FIRED (control EQUIVALENT) |
+| M02 | same | quiet hours skip (AC-N1) | FIRED (control EQUIVALENT) |
+| M03 | same | not-before skips the start day (S-33) | FIRED (control EQUIVALENT) |
+| M04 | same | integer days only, 5.5 rejected (S-16, S-18) | FIRED (control EQUIVALENT) |
+| M05 | same | no back-fill of missed slots (AC-N7) | FIRED (control EQUIVALENT) |
+| M06 | same | no catch-up after switching On (AC-E5) | FIRED (control EQUIVALENT) |
+| M07 | same | deadline slot inclusive (AC-N1, G1) | FIRED (control EQUIVALENT) |
+| M08 | same | last week's task not reused (S-35 / AC-O6) | FIRED (control EQUIVALENT) |
+| M09 | same | seed only for a missing key, [] stays empty (AC-S2/S3) | FIRED (control EQUIVALENT) |
+| M10 | notification-scheduler/reminder-rules.ts | isInQuietHours via localClockParts, TZ=America/Los_Angeles (AC-N1) | **INERT**: behaviourally equivalent. The old `toLocaleString` re-parse reads and writes in the SAME process timezone, so it is wrong only inside a DST gap of the server's own zone. H10 overstated the risk; the refactor is kept (strictly more correct) but is NOT a proven guard |
+| M11 | _shared/deadline-reminders-run.ts | Done stops nags (AC-N10) | FIRED (control EQUIVALENT) |
+| M12 | same | re-read on unique-key refusal (AC-O2 race) | FIRED (control EQUIVALENT) |
+| M13 | same | nag upsert ignores duplicates (AC-O2 / AC-N6) | FIRED (control EQUIVALENT) |
+| M14 | src/utils/deadlineReminders.ts | unedited list sent as undefined (AC-S9) | FIRED (control EQUIVALENT) |
+| M15 | same | same weekday = same day, not next week (S-24 via picker) | FIRED (control EQUIVALENT) |
+| M16 | src/components/SchedulingSettings.tsx | invalid item blocks the save (AC-S8) | FIRED (control EQUIVALENT) |
+| M17 | notification-delivery/index.ts | nag never dropped as ancient (H1) | FIRED (control EQUIVALENT) |
+| M18 | same | `deadline_reminder` in ALARM_TYPES (H2) | FIRED (control EQUIVALENT) |
+
+### New hazard found while building (not in the AC file)
+- **H11. `schedule_task_reminders` trigger** (migrations/20261008142455_unscheduled_task_cancels_start_alarms.sql).
+  For any task with a due_date it (a) on every INSERT/UPDATE DELETES the task's undelivered rows of every type
+  except `task_created` -- including a pending `deadline_reminder` row if the task is edited in the ~1 minute
+  between the scheduler insert and delivery (the next scheduler run in the same hour re-inserts it, because the
+  upsert key is then free; delivered rows are never deleted, so no double fire); and (b) adds its own
+  `task_created` push at creation, `due_soon` at deadline-15 min and `due_now` at the deadline. So the owner
+  also gets "Task Due Soon" at Sat 19:45 and "Task Due Now" at Sat 20:00 as ordinary (non-alarm) pushes,
+  unless due reminders are off. Left as is (no change to the trigger); owner to decide.
+
+### Decisions taken on safe defaults (reversible)
+- Seed parity with Activities: a user whose config has NO `deadlineReminders` key gets the seeded time card,
+  in Settings AND in the scheduler. Every account with notification_prefs and no saved list would nag on Fridays.
+  Alternative: scheduler acts only on a SAVED list (then the owner must touch the card once to switch it on).
+- Single start day in the UI (the stored shape and backend accept several; the window must fit between them).
+- `respectQuietHours` and `intervalMinutes` are per-item fields (default true / 60), beyond the spec's minimum.
+- Start alarm vs nag (G6): delivery skips a `task_start_*` alarm for any task that has deadline nag rows
+  (failure_reason `deadline_reminder_owns_alarm`); fails open on a lookup error.
