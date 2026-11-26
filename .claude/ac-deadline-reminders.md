@@ -61,3 +61,114 @@ Hazards found while reading. Each has an AC below; these are where a working-loo
 - H10. `isInQuietHours` builds `new Date(now.toLocaleString(...))` (reminder-rules.ts L36), which is only correct
   because the edge runtime clock is UTC. New tests must run with TZ=UTC or use `localClockParts`. (AC-T4)
 
+Reference scenario used below ("the owner's week"). Timezone America/New_York, quiet hours 22:00-06:00, time-card
+item: start Fri 19:00, deadline Sat 20:00, not-before 08:00, email on, chat on, every week. Expected fire slots
+(local): Fri 19:00, 20:00, 21:00; Sat 08:00 through 20:00 hourly. That is 16 slots if 20:00 is inclusive (see
+Gaps G1). Quiet hours block Fri 22:00 to Sat 05:59. Not-before blocks Sat 06:00 and 07:00.
+
+### Settings list (S)
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-S1 | Given Settings > Scheduling, when the page loads, then a card titled "Deadline reminders" renders as its OWN card next to the Activities card (SchedulingSettings.tsx L449-453), and none of its items appear inside the Activities card list | happy-path | Playwright: both card titles visible; Activities card text does not contain "Time card" |
+| AC-S2 | Given the owner's stored config has NO deadline-reminders key, when Settings loads, then exactly one seeded item shows: name "Time card", On, day Fri, start 19:00, deadline Sat 20:00, not-before 08:00, email On, chat On, every 1 week | happy-path | Playwright field values; DB `user_scheduling_prefs.config` unchanged until Save |
+| AC-S3 | Given the owner deletes the seeded item and clicks Save, when the page reloads, then the list is EMPTY and the seed is NOT re-added (an empty list is stored, not a missing key). Contrast `resolveActivities` L86-89, which re-seeds on a missing key | edge | DB: key present and `[]`; Playwright: 0 items after reload |
+| AC-S4 | Given the list, when the owner clicks Add, fills name "Expense report", Mon 09:00 to Tue 17:00, email Off, chat On, and Saves, then after reload the new item shows those exact values and the time card item is unchanged | happy-path | Playwright reload; DB JSON has 2 items with distinct ids |
+| AC-S5 | Given an item, when the owner edits start time 19:00 to 18:00 and Saves, then the stored item has start 18:00, the same id, and every other field unchanged | happy-path | DB diff of the item object |
+| AC-S6 | Given an item, when the owner switches it Off and Saves, then the stored item has `enabled:false` and is still listed (Off, not deleted) after reload | happy-path | Playwright switch state; DB |
+| AC-S7 | Given an item, when the owner clicks delete and Saves, then it is gone from the stored list and the other items keep their ids and values | happy-path | DB |
+| AC-S8 | Given invalid input (any REJECT row in the spelling table, a deadline at or before the start, a window longer than 7 days, no day chosen, an empty name), when the owner clicks Save, then an error naming the field is shown and NOTHING is written (stored config byte-identical) | error | Playwright error text; DB `updated_at` unchanged |
+| AC-S9 | Given the Settings page was loaded before an agent or second tab changed the deadline list, when the owner saves an edit to a DIFFERENT card (e.g. a time window), then the deadline list in the DB is the newer version, not the stale page's (same guard as `activitiesEdited`, L70-77) | regression | DB before/after; unit test of the save payload: key is `undefined` when the card was not touched |
+| AC-S10 | Given a save that changes only the deadline list, when it completes, then `activities`, `timeWindows`, `categoryMappings` and every other top-level config key are byte-identical (mergeStoredConfig L23-29) | regression | DB JSON diff limited to the one key |
+| AC-S11 | Given deadline items exist, when the busy-slot reader (`activityBusySlots`, activities.ts L215) or the nightly builder runs, then no busy block is produced for a deadline item (it is a nag, not reserved time) | regression | unit test: `activityBusySlots` output identical with and without deadline items in config |
+| AC-S12 | Given every-other-week is chosen, when the owner saves without picking an anchor date, then an anchor date is stored (as `normalizeActivity` L269-274 does) and the card shows which Friday is "on" | edge | DB anchorDate is YYYY-MM-DD; Playwright text |
+
+### Occurrence creation (O)
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-O1 | Given the owner's week, when the scheduler runs at Fri 19:00-19:59 local, then exactly ONE `public.tasks` row exists for that occurrence: owner's user_id, title containing the item name, status not DONE, a due date/time equal to the DEADLINE (Sat 20:00 local, stored correctly in UTC), and a stable reference to (item id, occurrence start date) | happy-path | SQL count of tasks with that reference = 1 |
+| AC-O2 | Given AC-O1's task exists, when the scheduler runs again in the same hour, every later hour of the window, and as a manual re-invoke (`immediate:true`), then the task count for that occurrence stays 1 | edge | same SQL after 3 invocations |
+| AC-O3 | Given the task insert succeeded but the run then failed (simulated throw after the task write), when the next hourly run happens, then it reuses the existing task (count stays 1) and still creates that hour's nag | error | unit test with an injected failure; SQL count |
+| AC-O4 | Given the scheduler runs Thu 19:00 or Fri 18:00 local, then no task is created for the coming occurrence (creation is not early) | edge | SQL count 0 |
+| AC-O5 | Given an occurrence's deadline has passed with the task still open, when later runs happen (Sat 21:00, Sun, Mon), then the old task is left exactly as it was (not DONE, not deleted, title and due unchanged) and no nag row is created for it | edge | SQL row unchanged; no `scheduled_notifications` rows for its task_id after the deadline |
+| AC-O6 | Given last week's occurrence task is still open, when the next Friday 19:00 arrives, then a NEW separate task is created for the new occurrence and nags reference only the NEW task_id | edge | two task rows, different refs; nag rows' task_id = new id |
+| AC-O7 | Given everyNWeeks=2 anchored on Fri 2026-11-27, then occurrences exist for 11-27, 12-11, 12-25 and none for 12-04 or 12-18. The Saturday slots of an "on" week fire even though Saturday is a different day from the anchor (membership is decided by the occurrence START date only) | edge | unit test over 6 weeks of hourly ticks; task count = 3 |
+| AC-O8 | Given the item is Off, or has been deleted, when Friday 19:00 arrives, then no task is created | edge | SQL count 0 |
+| AC-O9 | Given the owner opens the app on Fri 19:30, then the occurrence task is visible in TaskOS with the deadline shown | happy-path | Playwright task list text |
+
+### Nag slots (N)
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-N1 | Given the owner's week and the task not DONE, when hourly runs execute from Fri 18:00 to Sat 21:00 local, then nag rows are produced for exactly the reference slot list (Fri 19, 20, 21; Sat 08..20) and for no other hour | happy-path | unit test that drives the slot function over every hour of that span and asserts the exact list; live: `scheduled_notifications` rows for the task_id, ordered |
+| AC-N2 | Given Fri 22:00 through Sat 05:59 (quiet hours), then no nag row is created and no alarm, email or chat goes out | edge | unit test; live: no rows with scheduled_for in that span |
+| AC-N3 | Given Sat 06:00 and 07:00 (quiet over, before not-before), then no nag fires. The first Saturday nag is 08:00 | edge | unit test |
+| AC-N4 | Given any nag row, then `queued_during_quiet` is false. A nag is SKIPPED in quiet hours, never queued into the "Daily Summary" batch (delivery L700-705) | regression | SQL: no nag rows with `queued_during_quiet=true`; no Daily Summary containing the item name |
+| AC-N5 | Given the deadline Sat 20:00 has passed, when Sat 21:00 and later runs execute, then no nag row is created | edge | unit test; SQL |
+| AC-N6 | Given one slot (e.g. Sat 10:00), when the scheduler is invoked 3 times inside that hour, then exactly ONE nag row exists for (task_id, slot) and the phone, inbox and chat each receive exactly one notification for that slot | edge | SQL count per slot = 1; `send-push-notification` invocations for that tag = 1 |
+| AC-N7 | Given the scheduler missed 09:00 and 10:00 (outage) and runs at 11:05, then ONE nag fires for 11:00 and none is back-filled for 09:00 or 10:00 (no burst) | edge | unit test; SQL: no 09:00/10:00 slot rows |
+| AC-N8 | Given a run that starts late in the hour (10:17 or 10:52, past the 15-minute `TICK_WINDOW_MINUTES`, digest-content.ts L656), then the 10:00 slot still fires once in that hour | edge | unit test at :17 and :52 |
+| AC-N9 | Given Dismiss on the phone at 19:05, then no write happens to the task (status and updated_at unchanged) and the 20:00 nag still fires | happy-path | SQL task row before/after; 20:00 row delivered_at set |
+| AC-N10 | Given Done on the phone alarm at 20:03, then the task becomes DONE and NO later slot (21:00, Sat 08:00, ...) delivers anything on any channel. Any already-queued row for that task is marked skipped (delivery L804-822 behaviour) | happy-path | SQL tasks.status='DONE'; later rows have failure_reason set or do not exist; no push/email/chat after 20:03 |
+| AC-N11 | Given the task is marked DONE from the TaskOS app (not the phone) between slots, then AC-N10 holds the same way | happy-path | same |
+| AC-N12 | Given the task was DONE and the owner reopens it before the deadline, then nags resume at the next slot (task status is the only source of truth) | edge | unit test; SQL |
+| AC-N13 | Given the alarm's "Doing" button is pressed, then the task is not DONE and nags continue (see Gaps G3) | edge | SQL status != DONE; next slot fires |
+| AC-N14 | Given slots are anchored to clock hours from the start time, when the owner dismisses at 19:40, then the next fire is 20:00, not 20:40 (see Gaps G2) | edge | unit test |
+
+### Edits mid-window (E)
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-E1 | Given the window is live (Sat 10:30) and the owner turns the item Off and Saves, then no nag is delivered at 11:00 or later, and the open task is left as it is | edge | SQL: no delivered rows after the save time |
+| AC-E2 | Given the window is live and the owner deletes the item, then AC-E1 holds, and the task stays open and untouched | edge | SQL |
+| AC-E3 | Given the window is live and the owner moves the deadline from Sat 20:00 to Sat 14:00, then the last nag is 14:00 (inclusive, per G1) and the occurrence task is REUSED (count stays 1). Its due shows 14:00, or stays unchanged, per Gaps G5 | edge | SQL count; slot list |
+| AC-E4 | Given the window is live and the owner turns email Off, then the next slot sends alarm + chat and no email | edge | send-unified-notification invocations for the slot = 0 |
+| AC-E5 | Given an item turned Off at Sat 09:30 is turned back On at 12:20, then the next nag is 13:00. No catch-up for 10:00-12:00 | edge | SQL |
+| AC-E6 | Given the start day/time is changed so the current occurrence no longer contains "now", then no second task is created for the same week, and nags follow the new window from the next run | edge | unit test; SQL task count for the week at most 1 |
+
+### Delivery (D)
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-D1 | Given a nag slot, then the phone gets a FULL-SCREEN alarm: `send-push-notification` called with `channel:'calendar_events'`, `data.taskId` = the occurrence task id, a unique `tag` per row, and `deepLink:'/calendar?task=<id>'` (delivery L913-934) | happy-path | activity_log `alarm_notification_dispatched` with that taskId; the owner confirms on the phone a full-screen alarm with a Done button (LIVE, not sandbox) |
+| AC-D2 | Given a nag fires in the same 2-minute window as another reminder, then the nag is NOT batched (it is its own alarm batch, L707-713): the push still carries the single task id and the Done button | edge | activity_log batchSize=1 for the nag |
+| AC-D3 | Given the item's email switch is On and the global `notification_prefs.channels` has NO EMAIL, then one email per slot is sent through `send-unified-notification` (not a new mailer), naming the item and the deadline. With the switch Off, zero emails even if the global channels later include EMAIL | happy-path | function invocation log/channelResults; owner's inbox shows 1 email per slot |
+| AC-D4 | Given the item's chat switch is On, then one message per slot appears in TaskOS chat history via `send-chat-message`, naming the item and the deadline. Off means none | happy-path | chat history row count per slot = 1; Playwright chat text |
+| AC-D5 | Given the occurrence task has no `start_time`, then nags are NOT dropped as `task_unscheduled` (delivery L783-791) | regression | SQL: no nag row with failure_reason 'task_unscheduled' |
+| AC-D6 | Given the Saturday slots of an occurrence whose task was created on Friday, then nags are NOT dropped as "ancient" (L767-775), because the task's due date is the deadline date | regression | SQL: Saturday nag rows have delivered_at set, not failure_reason 'Task completed or ancient' |
+| AC-D7 | Given a slot where email delivery fails, then the alarm and chat for that slot still go out, the failure kind is recorded on that row, and the next slot proceeds normally | error | channelResults with email success:false; next slot delivered |
+| AC-D8 | Given the alarm push fails, then the row records the failure kind (it is not marked delivered silently), and email/chat for that slot still go out | error | row failure_reason / activity_log |
+| AC-D9 | Given each nag, then its title/body says what is due and when ("Time card due by Sat 8:00 PM") in the owner's timezone, not UTC | happy-path | push/email/chat text |
+
+### DST and timezone (T)
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-T1 | Given EST (Fri 2026-11-27), then the Fri 19:00 slot is 2026-11-28T00:00Z, a SATURDAY in UTC, and it fires as the Friday 19:00 start. Weekday is judged on the LOCAL clock (`localClockParts`), not UTC | edge | unit test at that instant |
+| AC-T2 | Given EDT (Fri 2026-10-30), then the Fri 19:00 slot is 23:00Z the same day; the next week (EST, Fri 2026-11-06) it is 2026-11-07T00:00Z. Both fire at local 19:00 | edge | unit test both weeks |
+| AC-T3 | Given an item whose window spans the fall-back night (e.g. Sat 22:00 to Sun 04:00 with quiet hours off, Sun 2026-11-01), then the slot list has no duplicate and no gap in elapsed hours, and no exception. Same for spring-forward (Sun 2026-03-08, local 02:00 does not exist): no fire labelled 02:00, no crash | edge | unit test lists |
+| AC-T4 | Given the test suite runs with a non-UTC process TZ (TZ=America/Los_Angeles), then every slot test still passes (no reliance on the server clock being UTC, per H10) | regression | run the tests with TZ set |
+| AC-T5 | Given the owner changes timezone to America/Chicago, then the slots move to 19:00 Chicago local from the next run | edge | unit test |
+| AC-T6 | Given a NULL timezone, then the America/New_York default is used (as `shouldSendAtLocalHour` does, L662-663) and the user is not skipped | edge | unit test |
+
+### Regression (R)
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-R1 | Given a user with NO deadline items, then the scheduler's output (overdue reminders, daily/weekly digests, calendar reminders) is identical to before the change for the same `now` | regression | existing `reminder-rules.test.ts` passes; snapshot of `processUserNotifications` output with and without the feature |
+| AC-R2 | `npm test` passes with at least the 765 baseline tests plus the new ones, and 0 failures | regression | `npm test` summary line |
+| AC-R3 | Given a deadline item that throws or yields an invalid row, then other users' and the same user's digests still insert that hour (the single bulk insert at scheduler/index.ts L98-110 is not poisoned) | error | unit test with an invalid item; digest rows present |
+| AC-R4 | Given the per-item email switch, then no OTHER notification type starts sending email (the global EMAIL filter at delivery L846-852 is unchanged for everything else) | regression | unit test on channel selection for `due_reminder`, `daily_digest`, the existing alarm types |
+| AC-R5 | Given existing task start alarms (`task_start_reminder`/`task_start_now`), then their Done/Doing, never-batched and unscheduled-skip behaviour is unchanged | regression | existing delivery tests; review of L16-19 and L783-822 |
+| AC-R6 | Given the occurrence task, then the phone receives at most ONE alarm per hour for it. If the nightly builder also places it on the calendar, its start alarm and a nag in the same hour do not both ring (see Gaps G6) | edge | activity_log alarm count per task per hour at most 1 |
+| AC-R7 | Huddle's phone is unaffected: the nag push targets TaskOS (journey-native, no `app:"huddle"`) | regression | push data has no `app:"huddle"` |
+
+### Performance (P)
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-P1 | Given the owner's account, then the hourly scheduler run takes no more than 2 s longer with the feature than without | performance | timed run / function logs |
+| AC-P2 | Given a nag slot HH:00, then the alarm reaches the phone by HH:05 (to confirm against the delivery cron cadence; see Gaps G7) | performance | push dispatch timestamp minus slot time |
+| AC-P3 | Given 20 deadline items for one user, then Settings saves in under 2 s and the scheduler makes one task query per user per run, not one per item | performance | timed save; query count in a unit test with a mock client |
+
