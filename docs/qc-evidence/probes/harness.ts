@@ -63,6 +63,9 @@ export function makeClient(db: Db) {
         like(c: string, v: any) { st.filters.push(['like', c, v]); return b; },
         not(c: string, op: string, v: any) { if (op !== 'like') throw new Error('not ' + op); st.filters.push(['notlike', c, v]); return b; },
         maybeSingle() { st.single = true; return b; },
+        // limit(): a no-op on the in-memory rows (resolveOwnerEmails calls .limit(1) before maybeSingle). ADDED
+        // 2026-11-26 for the get_my_config calendar_ignore test; without it the profile-email read threw and was swallowed.
+        limit() { return b; },
         then(res: any, rej: any) {
           try {
             ops.push({ table, kind: st.kind, filters: st.filters, payload: st.payload });
