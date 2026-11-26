@@ -24,6 +24,9 @@ import {
   setEnabled,
   slotVerdict,
   wantsChat,
+  nagPushFailed,
+  nagEmailFailed,
+  nagDeliveredUpdate,
   type DeadlineReminder,
 } from './deadline-reminders.ts';
 import { activityBusySlots } from './activities.ts';
@@ -349,7 +352,31 @@ test('H4 / H5 / AC-D7 / AC-D8: delivery picks channels via deliveryChannelsFor, 
   assert.match(src, /const channelsForDelivery = deliveryChannelsFor\(primaryType, enabledChannels, singleRow\?\.metadata\);/);
   assert.match(src, /wantsChat\(primaryType, singleRow\.metadata\)[\s\S]{0,200}send-chat-message/);
   assert.match(src, /if \(!isNag && pushError && enabledChannels\.some\(/);
-  assert.match(src, /failure_reason: nagFailures\.length \? nagFailures\.join\(','\) : null/);
+  assert.match(src, /if \(isNag && nagPushFailed\(pushError, pushData\)\) nagFailures\.push\('push_failed'\);/);
+  assert.match(src, /if \(isNag && nagEmailFailed\(unifiedError, unifiedResult\)\) nagFailures\.push\('email_failed'\);/);
+  assert.match(src, /deliveredUpdate = nagDeliveredUpdate\(new Date\(\)\.toISOString\(\), nagFailures, existingReason\);/);
+  assert.match(src, /let deliveredUpdate: Record<string, unknown> = \{ delivered_at: new Date\(\)\.toISOString\(\), failure_reason: null \};/,
+    'non-nag rows keep the original update');
+});
+
+test('AC-D8 (verifier loop 1 #1): a 200 with delivered:0 is a push failure; delivered>=1 or no data is not', () => {
+  assert.equal(nagPushFailed(null, { success: true, delivered: 0, failed: 2 }), true);
+  assert.equal(nagPushFailed(null, { success: true, message: 'No push subscriptions found', delivered: 0 }), true);
+  assert.equal(nagPushFailed({ message: '500' }, null), true);
+  assert.equal(nagPushFailed(null, { success: true, delivered: 1, failed: 1 }), false);
+  assert.equal(nagPushFailed(null, null), false);
+});
+test('AC-D7 (verifier loop 1 #2): a 207 / success:false email is a failure, and a stored reason is never nulled', () => {
+  assert.equal(nagEmailFailed(null, { success: false, outcome: 'partial' }), true);
+  assert.equal(nagEmailFailed(null, { success: true, outcome: 'failed' }), true);
+  assert.equal(nagEmailFailed({ message: 'x' }, null), true);
+  assert.equal(nagEmailFailed(null, { success: true, outcome: 'success' }), false);
+  assert.equal(nagEmailFailed(null, null), false);
+  const t = '2026-11-28T00:01:00.000Z';
+  assert.deepEqual(nagDeliveredUpdate(t, [], null), { delivered_at: t });
+  assert.ok(!('failure_reason' in nagDeliveredUpdate(t, [], 'EMAIL: smtp 550')), 'no failure -> key left out, existing reason kept');
+  assert.deepEqual(nagDeliveredUpdate(t, ['email_failed'], 'EMAIL: smtp 550'), { delivered_at: t, failure_reason: 'email_failed; EMAIL: smtp 550' });
+  assert.deepEqual(nagDeliveredUpdate(t, ['push_failed', 'email_failed'], null), { delivered_at: t, failure_reason: 'push_failed,email_failed' });
 });
 test('H6 / AC-R3: the scheduler runs the nag pass per user in try/catch, before and apart from the bulk insert', () => {
   const src = schedulerSrc();

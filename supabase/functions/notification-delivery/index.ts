@@ -12,7 +12,7 @@ import { renderBriefingBody, renderBriefingHtml, nextDays } from "./notification
 import { irisWindowRequest } from "./iris-window.ts";
 import { batchLine } from "./batch-line.ts";
 import { localDateToUtcBounds } from "../_shared/timezone.ts";
-import { DEADLINE_REMINDER_TYPE, deliveryChannelsFor, wantsChat } from "../_shared/deadline-reminders.ts";
+import { DEADLINE_REMINDER_TYPE, deliveryChannelsFor, wantsChat, nagPushFailed, nagEmailFailed, nagDeliveredUpdate } from "../_shared/deadline-reminders.ts";
 
 // Notification types that become the phone's full-screen alarm (channel `calendar_events`).
 // `deadline_reminder` (the hourly "time card" nag) is an alarm too, but NOT a task_start_* type, so the
@@ -948,7 +948,7 @@ serve(async (req) => {
             continue;
           }
 
-          const { error: pushError } = await supabaseClient.functions.invoke('send-push-notification', {
+          const { data: pushData, error: pushError } = await supabaseClient.functions.invoke('send-push-notification', {
             body: {
               userId: userId,
               title: title,
@@ -979,7 +979,7 @@ serve(async (req) => {
           const singleRow = batchNotifications.length === 1 ? batchNotifications[0] : null;
           const isNag = primaryType === DEADLINE_REMINDER_TYPE;
           const nagFailures: string[] = [];
-          if (isNag && pushError) nagFailures.push('push_failed');
+          if (isNag && nagPushFailed(pushError, pushData)) nagFailures.push('push_failed');
           if (isNag && singleRow && wantsChat(primaryType, singleRow.metadata)) {
             try {
               const { error: chatError } = await supabaseClient.functions.invoke('send-chat-message', {
@@ -1058,20 +1058,31 @@ serve(async (req) => {
 
             if (unifiedError) {
               console.error(`Unified notification failed: ${unifiedError.message}`);
-              if (isNag) nagFailures.push('email_failed');
             }
+            if (isNag && nagEmailFailed(unifiedError, unifiedResult)) nagFailures.push('email_failed');
           }
 
           if (!isNag && pushError && enabledChannels.some((channel: string) => ['SLACK', 'EMAIL', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel))) {
             throw new Error(`All notification delivery methods failed`);
           }
 
+          // A nag never nulls a reason send-unified-notification already stored, and records its own failure
+          // kinds in front of it (AC-D7/D8). Every other type keeps the original update exactly.
+          let deliveredUpdate: Record<string, unknown> = { delivered_at: new Date().toISOString(), failure_reason: null };
+          if (isNag) {
+            let existingReason: string | null = null;
+            if (nagFailures.length) {
+              try {
+                const { data: cur } = await supabaseClient
+                  .from('scheduled_notifications').select('failure_reason').eq('id', notificationIds[0]).maybeSingle();
+                existingReason = cur?.failure_reason ?? null;
+              } catch { /* keep the kinds alone */ }
+            }
+            deliveredUpdate = nagDeliveredUpdate(new Date().toISOString(), nagFailures, existingReason);
+          }
           const { error: updateError } = await supabaseClient
             .from('scheduled_notifications')
-            .update({ 
-              delivered_at: new Date().toISOString(),
-              failure_reason: nagFailures.length ? nagFailures.join(',') : null
-            })
+            .update(deliveredUpdate)
             .in('id', notificationIds);
 
           if (updateError) {

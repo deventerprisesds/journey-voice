@@ -378,6 +378,35 @@ export function deliveryChannelsFor(notificationType: string, globalChannels: st
   return (globalChannels || []).filter((c) => !['PUSH', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(c));
 }
 
+/**
+ * Did the nag's push fail? send-push-notification answers HTTP 200 with `delivered: 0` when every send failed
+ * or there is no subscription, so `functions.invoke` reports no error (verifier loop 1 #1, AC-D8).
+ */
+export function nagPushFailed(pushError: unknown, pushData: any): boolean {
+  return !!pushError || (pushData != null && typeof pushData === 'object' && pushData.delivered === 0);
+}
+
+/**
+ * Did the nag's email fail? send-unified-notification answers 207 (still 2xx, so no invoke error) with
+ * `success: false` / `outcome !== 'success'` when a channel failed (verifier loop 1 #2, AC-D7).
+ */
+export function nagEmailFailed(unifiedError: unknown, unifiedResult: any): boolean {
+  if (unifiedError) return true;
+  if (!unifiedResult || typeof unifiedResult !== 'object') return false;
+  return unifiedResult.success === false || (typeof unifiedResult.outcome === 'string' && unifiedResult.outcome !== 'success');
+}
+
+/**
+ * The delivered-row update for a nag. Never writes `failure_reason: null`: with no new failure the key is
+ * left out, so a reason send-unified-notification already stored survives; with failures the kinds are
+ * written in front of that existing reason (AC-D7/D8).
+ */
+export function nagDeliveredUpdate(deliveredAt: string, failures: string[], existingReason: string | null | undefined) {
+  if (!failures.length) return { delivered_at: deliveredAt };
+  const reason = [failures.join(','), existingReason || ''].filter(Boolean).join('; ').slice(0, 500);
+  return { delivered_at: deliveredAt, failure_reason: reason };
+}
+
 /** True when a nag row asks for a TaskOS chat message (H5). */
 export function wantsChat(notificationType: string, metadata: any): boolean {
   return notificationType === DEADLINE_REMINDER_TYPE && metadata?.chat === true;
