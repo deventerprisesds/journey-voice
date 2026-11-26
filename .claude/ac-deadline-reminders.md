@@ -172,3 +172,92 @@ Gaps G1). Quiet hours block Fri 22:00 to Sat 05:59. Not-before blocks Sat 06:00 
 | AC-P2 | Given a nag slot HH:00, then the alarm reaches the phone by HH:05 (to confirm against the delivery cron cadence; see Gaps G7) | performance | push dispatch timestamp minus slot time |
 | AC-P3 | Given 20 deadline items for one user, then Settings saves in under 2 s and the scheduler makes one task query per user per run, not one per item | performance | timed save; query count in a unit test with a mock client |
 
+### Spelling table (Tier 1: parses times and days, and matches the clock against them)
+
+Documented by: the repo's OWN grammar, which the new parser must reuse rather than re-invent:
+`parseClockTime` (activities.ts L107-111: `^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?$`, hour <= 23, trimmed),
+`HHMM` (L92: `^([01]\d|2[0-3]):([0-5]\d)$`), the days rule "0=Sun..6=Sat" (L35, L266), `occursOn` (L127-140),
+`isInQuietHours` (reminder-rules.ts L34-59, overnight when start > end), `localClockParts` (digest-content.ts L642).
+External standards I could NOT open in this pass (named under Gaps): WHATWG HTML `<input type=time>` value
+format, IANA tz rules for America/New_York 2026.
+
+**Times (start, deadline, not-before)**
+
+| # | Input spelling | Documented by | Expected verdict | Wrong answer would be |
+|---|---|---|---|---|
+| S-1 | `19:00` | HHMM L92 | ACCEPT as 19:00 | FALSE REFUSAL |
+| S-2 | `7:00` | parseClockTime pads, L110 | ACCEPT as **07:00** (7 AM, never 7 PM) | FALSE PASS (fires 12 h wrong) |
+| S-3 | `07:00` | HHMM | ACCEPT 07:00 | FALSE REFUSAL |
+| S-4 | `19:00:00` | parseClockTime seconds group | ACCEPT as 19:00 | FALSE REFUSAL |
+| S-5 | ` 19:00 ` (spaces) | parseClockTime `.trim()` | ACCEPT 19:00 | FALSE REFUSAL |
+| S-6 | `24:00` | parseClockTime `> 23` null; HHMM rejects | REJECT with a message (use 23:59 or next-day 00:00). Note `isInQuietHours` would treat 24:00 as minute 1440, so it must never reach the clock math | FALSE PASS |
+| S-7 | `23:59` | HHMM | ACCEPT | FALSE REFUSAL |
+| S-8 | `00:00` as deadline | HHMM | ACCEPT as midnight at the START of the chosen deadline day | FALSE PASS if read as end of day |
+| S-9 | `19:60`, `19:5` | `[0-5]\d` | REJECT | FALSE PASS |
+| S-10 | `7pm`, `7:00 PM`, `19h`, `1900`, `19.00` | not in grammar | REJECT (no 12-hour guessing) | FALSE PASS |
+| S-11 | `-1:00`, `` (empty), `null` | not in grammar | REJECT; never fall back to "now" (L105 comment) | FALSE PASS |
+| S-12 | `٠٧:٠٠` (non-ASCII digits) | `\d` in JS without `u` matches ASCII only | REJECT | FALSE PASS |
+
+**Days**
+
+| # | Input spelling | Documented by | Expected verdict | Wrong answer would be |
+|---|---|---|---|---|
+| S-13 | `5` | L35 0=Sun..6=Sat | Friday | FALSE PASS if Thursday/Saturday |
+| S-14 | `6` | same | Saturday | same |
+| S-15 | `0` | same | Sunday | FALSE REFUSAL if rejected as falsy |
+| S-16 | `7` | L266 filter `d <= 6` | REJECT (not Sunday) | FALSE PASS |
+| S-17 | `"5"` (string) | L266 `.map(Number)` | ACCEPT as Friday | FALSE REFUSAL |
+| S-18 | `5.5` | L266 filter keeps 5.5 (`>=0 && <=6`). FINDING: the existing filter does not reject non-integers | REJECT | FALSE PASS (never matches any weekday, item silently never fires) |
+| S-19 | `[]` | L267 | REJECT "choose a day" | FALSE PASS (never fires) |
+| S-20 | `[5,5]` | L268 dedupe | ACCEPT as `[5]`; one occurrence per week | FALSE PASS (two tasks) |
+| S-21 | Fri 19:00 EST = `2026-11-28T00:00Z` (UTC Saturday) | localClockParts L642 | counts as FRIDAY | FALSE REFUSAL (Friday start missed every winter week) |
+| S-22 | Fri 19:00 EDT = `2026-10-30T23:00Z` | same | Friday | FALSE REFUSAL |
+
+**Windows and quiet hours** (owner tz; slots listed local)
+
+| # | Input | Documented by | Expected verdict | Wrong answer would be |
+|---|---|---|---|---|
+| S-23 | start Fri 19:00, deadline Sat 20:00 (crosses midnight) | owner request | VALID; slots per reference scenario | FALSE REFUSAL |
+| S-24 | start Fri 19:00, deadline Fri 08:00 (same day, earlier) | - | REJECT "deadline must be after start" (do not silently roll to next week) | FALSE PASS |
+| S-25 | deadline == start | - | REJECT | FALSE PASS |
+| S-26 | start Fri 19:00, deadline the following Sat 20:00 (> 7 days) | overlaps next occurrence | REJECT | FALSE PASS (two live occurrences) |
+| S-27 | quiet 22:00-06:00, not-before 08:00 | L53-58 overnight branch | first Sat slot 08:00 | FALSE PASS if 06:00 or 07:00 fires |
+| S-28 | quiet 22:00-09:00, not-before 08:00 (quiet ends AFTER not-before) | same | first Sat slot **09:00**; quiet wins | FALSE PASS (08:00 fires inside quiet hours) |
+| S-29 | quiet 23:00-06:00 | same | Fri 22:00 FIRES; Fri 23:00 does not | FALSE REFUSAL at 22:00 / FALSE PASS at 23:00 |
+| S-30 | quiet hours null/unset | L41 returns false | Fri 19..23 fire; Sat 00:00-07:59 do NOT (not-before applies to every day after the start day); Sat 08..20 fire | FALSE PASS (overnight 1 AM alarm) |
+| S-31 | quiet 22:00-22:00 (start == end) | L56-57: always false | treated as no quiet hours (same as S-30) | either direction; pin it |
+| S-32 | quiet 19:00-06:00 (starts before the deadline) | overnight branch | Sat 19:00 and 20:00 SKIPPED; the deadline passes with no final nag (see G4) | FALSE PASS (fires in quiet) |
+| S-33 | not-before 08:00 on the START day (Fri) | owner: "starting again saturday morning" | not-before does NOT apply on the start day; Fri 19:00 fires | FALSE REFUSAL |
+| S-34 | Over-match negative: an Activity named "Time card" in `config.activities` | different key | creates NO task and NO nag; only items in the deadline list nag | FALSE PASS |
+| S-35 | Over-match negative: an existing open task titled "Time card" created by hand | - | is NOT adopted as the occurrence task (matched by item reference, not by title) and gets no nags | FALSE PASS |
+
+### Goal -> AC coverage
+- "chat and email starting 7pm Friday" -> AC-N1, AC-D3, AC-D4, AC-T1, AC-T2
+- "respecting quiet time settings" -> AC-N2, AC-N4, S-27..S-32
+- "starting again Saturday morning (08:00)" -> AC-N3, S-27, S-28, S-30, S-33
+- "through Saturday at 8pm" -> AC-N1, AC-N5, AC-O5, G1
+- "every hour after dismissed" -> AC-N9, AC-N14, AC-N6, AC-N7, AC-N8
+- "if I click submitted (Done) it stops" -> AC-N10, AC-N11, AC-N12, AC-N13
+- "absolutely must be done" (an open task remains after the deadline) -> AC-O5, AC-O6
+- "an actual feature I can edit, turn on and off, add a similar item" -> AC-S1..AC-S12, AC-E1..AC-E6
+- "full-screen alarm and email like regular TaskOS emails" -> AC-D1, AC-D2, AC-D3, AC-D5, AC-D6
+- Every-other-week reuse of the Activities shape -> AC-O7, AC-S12
+- Must not break what exists -> AC-R1..AC-R7, AC-S9..AC-S11
+- No AC without a goal: AC-P1..AC-P3 are the performance defaults the owner did not state (confirm below).
+
+### Gaps / open questions (each has a safe default the ACs assume; reversible)
+- **G1. Is 20:00 inclusive?** "through Saturday at 8pm". Default: YES, a final nag at 20:00 (16 slots). Alternative: last nag 19:00 (15 slots).
+- **G2. Hour anchor.** Default: nags on clock hours counted from the start time (19:00, 20:00, ...), not "60 min after you dismissed". Dismiss at 19:40 means the next nag is 20:00.
+- **G3. "Doing" button.** The alarm shows Done/Doing for task alarms. Default: Doing does not stop nags. Alternative: hide Doing on this alarm type.
+- **G4. Quiet hours that swallow the deadline (S-32).** Default: quiet wins, no final nag. Alternative: one nag at the last non-quiet hour before the deadline.
+- **G5. Editing the deadline mid-window.** Default: the open task's due date updates to the new deadline.
+- **G6. Double alarm (AC-R6).** If the nightly builder schedules the occurrence task, its existing task start alarm could ring in the same hour as a nag. Default: at most one alarm per task per hour, with the nag taking precedence. The implementer must say which mechanism enforces it.
+- **G7. Delivery latency.** I did not read the `notification-delivery` cron cadence. AC-P2's HH:05 bound needs confirming against it.
+- **G8. Overdue reminders on a missed time card.** `generateOverdueReminders` (reminder-rules.ts L69) will treat an open past-deadline occurrence task like any overdue task and remind daily at 9 AM. Default: leave that existing behaviour as is (the task "absolutely must be done"). Owner to confirm.
+- **G9. Agent tool.** The owner asked to edit items himself, in Settings. A chat/agent tool to manage the list is out of scope here unless he asks for it.
+- **G10. Standards not opened:** WHATWG `<input type=time>` value format (affects S-2/S-4 from the UI), and IANA tz 2026 America/New_York transitions (assumed Mar 8 and Nov 1, 2026, per US rules). Neither was read in this pass. Rows S-21, S-22 and AC-T2/T3 must be confirmed by running the code with those instants, not from recall.
+- **G11. Live proof.** AC-D1 (full-screen alarm with Done) and AC-D3 (email in inbox) can only be confirmed by the owner on his phone and in his inbox. A sandbox push log is mechanism-only evidence.
+- Not covered by reading: `send-chat-message` and `send-unified-notification` internals, `notification-callback` (the Done action path), the `schedule_task_reminders` DB trigger, and `scripts/run-tests.mjs`. ACs that touch them are stated as observables, not line citations.
+
+AC-DONE
+
