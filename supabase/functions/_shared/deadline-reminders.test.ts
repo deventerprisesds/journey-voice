@@ -329,3 +329,28 @@ test('H2: the nag type is an ALARM type in delivery but not a task_start_* type'
   assert.match(alarm, /'deadline_reminder'/);
   assert.ok(!DEADLINE_REMINDER_TYPE.startsWith('task_start'));
 });
+
+// ── Delivery and scheduler wiring (source shape: both index.ts files call `serve` on import) ─────
+const deliverySrc = () => readFileSync(new URL('../notification-delivery/index.ts', import.meta.url), 'utf8');
+const schedulerSrc = () => readFileSync(new URL('../notification-scheduler/index.ts', import.meta.url), 'utf8');
+
+test('H1 / AC-D6: delivery never drops a nag as "ancient" (both the keep-filter and the skip-marking)', () => {
+  const hits = deliverySrc().match(/ancientTaskIds\.has\(n\.task_id\)\)? && n\.notification_type !== DEADLINE_REMINDER_TYPE/g) || [];
+  assert.equal(hits.length, 2);
+});
+test('H4 / H5 / AC-D7 / AC-D8: delivery picks channels via deliveryChannelsFor, sends chat, records failure kinds', () => {
+  const src = deliverySrc();
+  assert.match(src, /const channelsForDelivery = deliveryChannelsFor\(primaryType, enabledChannels, singleRow\?\.metadata\);/);
+  assert.match(src, /wantsChat\(primaryType, singleRow\.metadata\)[\s\S]{0,200}send-chat-message/);
+  assert.match(src, /if \(!isNag && pushError && enabledChannels\.some\(/);
+  assert.match(src, /failure_reason: nagFailures\.length \? nagFailures\.join\(','\) : null/);
+});
+test('H6 / AC-R3: the scheduler runs the nag pass per user in try/catch, before and apart from the bulk insert', () => {
+  const src = schedulerSrc();
+  const pass = src.indexOf('await runDeadlineRemindersForUser(');
+  const bulk = src.indexOf('.insert(notifications)');
+  assert.ok(pass > 0 && bulk > pass, 'pass runs before, and separate from, the bulk insert');
+  const loop = src.slice(src.lastIndexOf('for (const prefs of allPrefs', pass), pass);
+  assert.match(loop, /try \{/);
+  assert.ok(!/notifications\.push/.test(src.slice(pass, bulk)), 'no nag goes into the bulk array');
+});
