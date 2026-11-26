@@ -38,3 +38,17 @@ Built in an isolated agent worktree (the scratchpad clone was refused by the wor
 - Correction to H7: a unique index on scheduled_notifications DOES exist
   (migrations/20250929221846_..., `(user_id, task_id, notification_type, scheduled_for)`); the nag upsert uses it.
 - Tests: 813 total after chunk 2 (765 baseline + 48 new).
+
+## Chunk 3 — Settings card
+- `src/utils/deadlineReminders.ts` (new): add / patch (On stamps enabledSince) / remove, deadline-weekday picker
+  (same weekday = same day, never next week), whole-list validation before Save, save payload that sends an
+  agent-editable list only when edited (AC-S9 / H9).
+- `src/components/DeadlineRemindersSettings.tsx` (new): its OWN "Deadline reminders" card.
+- `src/components/SchedulingSettings.tsx`: mounts the card right after Activities; `deadlineRemindersEdited`
+  guard; an invalid item blocks the whole save with a field-named error (AC-S8); saves the validated items.
+- `src/config/schedulingRules.ts`: `deadlineReminders?` on SchedulingConfig, passed through undefined-when-unsaved.
+- `src/utils/deadlineReminders.test.ts` (new): 12 tests (helpers + source shape).
+- NOT verified: a real TypeScript typecheck / Vite build of the frontend (no node_modules installable here);
+  syntax checked with `ts.transpileModule` only. No browser run.
+- Tests: 825 total (UTC). Under TZ=America/Los_Angeles every new test passes; the one failure is
+  `notification-scheduler/reminder-rules.test.ts`'s own pre-existing "run with TZ=UTC" guard (on main too).
