@@ -379,10 +379,6 @@ export function deliveryChannelsFor(notificationType: string, globalChannels: st
 }
 
 /**
- * Did the nag's push fail? send-push-notification answers HTTP 200 with `delivered: 0` when every send failed
- * or there is no subscription, so `functions.invoke` reports no error (verifier loop 1 #1, AC-D8).
- */
-/**
  * The SAME full-screen alarm, sent to the Huddle phone app. Measured 2026-11-28: the owner's phone runs the
  * Huddle app (3 `fcm:app:huddle:*` tokens); a journey-native push skips every `fcm:app:*` token
  * (send-push-notification), so Friday's three nags reached only TaskOS's 2 registrations (1 ok, 1 failed)
@@ -408,6 +404,10 @@ export function nagHuddleAlarmBody(input: { userId: string; title: string; body:
   };
 }
 
+/**
+ * Did the nag's push fail? send-push-notification answers HTTP 200 with `delivered: 0` when every send failed
+ * or there is no subscription, so `functions.invoke` reports no error (verifier loop 1 #1, AC-D8).
+ */
 export function nagPushFailed(pushError: unknown, pushData: any): boolean {
   return !!pushError || (pushData != null && typeof pushData === 'object' && pushData.delivered === 0);
 }
