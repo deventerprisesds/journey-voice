@@ -3,6 +3,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { CATEGORY_KEYS, normalizeCategory } from "../_shared/categories.ts";
 import { normalizePriority } from "../_shared/task-priority.ts";
+import { taskParseResponseFormat } from "../_shared/task-parse-schema.ts";
 import { buildCategoryGuide, categoryHintsFromKeywords } from "../_shared/category-guide.ts";
 
 const corsHeaders = {
@@ -276,13 +277,13 @@ Primary task types:
 - PROF_EDUCATION: Formal degree programs (MIT, EMBA, universities)
 - EDUCATION: Self-paced learning (Coursera, certifications, personal study)
 
-Examples (note the status is a WORKFLOW state in every one, never the category):
-- "Doctor appointment" → category: "LIFE", status: "BACKLOG"
-- "Team standup meeting" → category: "JOB", status: "BACKLOG"
-- "Complete MIT assignment" → category: "PROF_EDUCATION", status: "BACKLOG"
-- "EMBA group project" → category: "PROF_EDUCATION", status: "BACKLOG"
-- "Take Coursera course" → category: "EDUCATION", status: "BACKLOG"
-- "Research startup funding" → category: "VENTURES", status: "BACKLOG"
+Examples:
+- "Doctor appointment" → category: "LIFE"
+- "Team standup meeting" → category: "JOB"
+- "Complete MIT assignment" → category: "PROF_EDUCATION"
+- "EMBA group project" → category: "PROF_EDUCATION"
+- "Take Coursera course" → category: "EDUCATION"
+- "Research startup funding" → category: "VENTURES"
 - "I already started the Geo-AI app" → category: "VENTURES", status: "DOING"
 
 INTENT DETECTION — KEYWORD ONLY:
@@ -320,13 +321,13 @@ Guidelines:
 - Make titles concise but actionable
 - Add context to descriptions when helpful
 
-Examples (category varies; status is a workflow state in every one):
-- "Study for MIT midterm exam" → category: "PROF_EDUCATION", status: "BACKLOG"
-- "Complete EMBA group project" → category: "PROF_EDUCATION", status: "BACKLOG"
-- "Find universities to sell our software to" → category: "VENTURES", status: "BACKLOG"
-- "Pitch product to MIT procurement office" → category: "VENTURES", status: "BACKLOG"
-- "Pay credit cards" → category: "LIFE", status: "BACKLOG"
-- "Prepare slides for client meeting" → category: "JOB", status: "BACKLOG"`;
+- PRIORITY is only LOW, MEDIUM, HIGH or URGENT. With no urgency words, use MEDIUM. Never put a status word in priority.
+
+Examples:
+- "Study for MIT midterm exam" → category: "PROF_EDUCATION", priority: "MEDIUM"
+- "Find universities to sell our software to" → category: "VENTURES", priority: "MEDIUM"
+- "Urgent: pay credit cards today" → category: "LIFE", priority: "URGENT"
+- "Prepare slides for client meeting" → category: "JOB", priority: "MEDIUM"`;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -341,6 +342,9 @@ Examples (category varies; status is a workflow state in every one):
           { role: 'user', content: text }
         ],
         temperature: 0.1,
+        // Strict output schema: priority/status/category/intent can only be allowed values (2026-11-26 replay:
+        // priority "BACKLOG" on 26 of 30 tasks when the shape was only described in the prompt).
+        response_format: taskParseResponseFormat(),
       }),
     });
 
