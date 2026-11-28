@@ -1,5 +1,5 @@
 # Project Memory — journey-voice
-Last updated: 2026-11-26
+Last updated: 2026-11-28
 
 > **MOVE THE DATE ABOVE IN THE SAME COMMIT THAT APPENDS A SECTION.** It read `2026-09-21` while
 > this file already carried sections dated 2026-10-08 and 2026-10-12 — three weeks of the header
@@ -15,6 +15,11 @@ Last updated: 2026-11-26
 
 
 
+
+## Push routing trap: TaskOS pushes never reach the Huddle phone app (#146, 2026-11-28; LIVE, owner NOT yet confirmed)
+- The owner's phone runs the **Huddle** app (`fcm:app:huddle:*` tokens). A journey-native push (no `app`) skips every `fcm:app:*` token (`send-push-notification/index.ts:173-186`), so TaskOS alarms (deadline nags AND `task_start_*`) reach only the stale web push + TaskOS FCM token (1 ok / 1 failed). Friday's time-card nags therefore arrived by email only, with no alarm and no Done.
+- Fix (#146 `3c0a4e96`, deploy 46109418511): `deadline_reminder` rows ALSO send `nagHuddleAlarmBody` (app huddle, calendar_events, taskId -> Done). Other types unchanged, so `task_start_*` alarms still miss the Huddle app (open question for the owner).
+- Backup: Huddle agents can `update_task` status DONE by id (no title lookup); DONE stops scheduler + delivery.
 
 ## Deadline reminders + Huddle follows TaskOS calendar-ignore (#142, #143, huddle #300, 2026-11-26; LIVE, owner NOT yet confirmed)
 - **Deadline reminders (#143):** `config.deadlineReminders` list (own Settings card beside Activities). Pure rules `_shared/deadline-reminders.ts` (reuses Activities' `occursOn`/`parseClockTime`); per-user run `_shared/deadline-reminders-run.ts` acts ONLY on a saved list, one task per occurrence keyed by `tasks.deadline_reminder_ref` (`<itemId>@<start date>`). Delivery type `deadline_reminder` = full-screen alarm with Done, exempt from the "ancient" drop, per-item email (bypasses the global EMAIL channel) + chat. Owner's time card saved 2026-11-26 19:10 UTC (Fri 19:00 -> Sat 20:00, hourly, not before 08:00). First slot Fri 2026-11-27 19:00 ET; check scheduled 19:06 ET.
