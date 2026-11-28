@@ -382,6 +382,32 @@ export function deliveryChannelsFor(notificationType: string, globalChannels: st
  * Did the nag's push fail? send-push-notification answers HTTP 200 with `delivered: 0` when every send failed
  * or there is no subscription, so `functions.invoke` reports no error (verifier loop 1 #1, AC-D8).
  */
+/**
+ * The SAME full-screen alarm, sent to the Huddle phone app. Measured 2026-11-28: the owner's phone runs the
+ * Huddle app (3 `fcm:app:huddle:*` tokens); a journey-native push skips every `fcm:app:*` token
+ * (send-push-notification), so Friday's three nags reached only TaskOS's 2 registrations (1 ok, 1 failed)
+ * and never the phone ("only happening via email ... no full screen alarm and as a result no way to mark
+ * done"). `app: 'huddle'` targets exactly those tokens; `taskId` makes journey mint the signed action token,
+ * so the alarm shows Done, which marks the occurrence task DONE and stops later nags -- the same route
+ * Huddle's own task-linked alarms use (huddle reminders.ts). Pure, so the shape is testable.
+ */
+export function nagHuddleAlarmBody(input: { userId: string; title: string; body: string; taskId: string | null; notificationId: string }) {
+  return {
+    userId: input.userId,
+    title: input.title,
+    body: input.body,
+    channel: 'calendar_events',
+    app: 'huddle',
+    data: {
+      type: DEADLINE_REMINDER_TYPE,
+      taskId: input.taskId,
+      notificationId: input.notificationId,
+      tag: `n-${input.notificationId}-huddle`,
+      deepLink: '/',
+    },
+  };
+}
+
 export function nagPushFailed(pushError: unknown, pushData: any): boolean {
   return !!pushError || (pushData != null && typeof pushData === 'object' && pushData.delivered === 0);
 }
