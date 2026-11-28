@@ -25,6 +25,7 @@ import {
   slotVerdict,
   wantsChat,
   nagPushFailed,
+  nagHuddleAlarmBody,
   nagEmailFailed,
   nagDeliveredUpdate,
   type DeadlineReminder,
@@ -397,4 +398,21 @@ test('H6 / AC-R3: the scheduler runs the nag pass per user in try/catch, before 
   const loop = src.slice(src.lastIndexOf('for (const prefs of allPrefs', pass), pass);
   assert.match(loop, /try \{/);
   assert.ok(!/notifications\.push/.test(src.slice(pass, bulk)), 'no nag goes into the bulk array');
+});
+
+// 2026-11-28 owner: "only happening via email ... no full screen alarm ... no way to mark done". The phone runs the
+// Huddle app, which a journey-native push skips. Each nag now also goes to the Huddle app, with Done.
+test('HUD-1 the Huddle alarm targets the Huddle app, alarm channel, carries the task id (Done) and a unique tag', () => {
+  const b = nagHuddleAlarmBody({ userId: 'u1', title: 'T', body: 'B', taskId: 't1', notificationId: 'n1' });
+  assert.equal(b.app, 'huddle');
+  assert.equal(b.channel, 'calendar_events');
+  assert.equal(b.data.taskId, 't1');
+  assert.equal(b.data.type, 'deadline_reminder');
+  assert.equal(b.data.tag, 'n-n1-huddle');
+  assert.equal(b.userId, 'u1');
+});
+test('HUD-2 delivery sends the Huddle alarm for deadline nags only, and records its failure kind', () => {
+  const src = readFileSync(new URL('../notification-delivery/index.ts', import.meta.url), 'utf8');
+  assert.match(src, /if \(isNag && singleRow\) \{\n\s*try \{\n\s*const \{ data: hData, error: hError \} = await supabaseClient\.functions\.invoke\('send-push-notification', \{\n\s*body: nagHuddleAlarmBody\(/);
+  assert.match(src, /if \(nagPushFailed\(hError, hData\)\) nagFailures\.push\('huddle_push_failed'\);/);
 });

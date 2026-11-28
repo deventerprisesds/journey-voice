@@ -12,7 +12,7 @@ import { renderBriefingBody, renderBriefingHtml, nextDays } from "./notification
 import { irisWindowRequest } from "./iris-window.ts";
 import { batchLine } from "./batch-line.ts";
 import { localDateToUtcBounds } from "../_shared/timezone.ts";
-import { DEADLINE_REMINDER_TYPE, deliveryChannelsFor, wantsChat, nagPushFailed, nagEmailFailed, nagDeliveredUpdate } from "../_shared/deadline-reminders.ts";
+import { DEADLINE_REMINDER_TYPE, deliveryChannelsFor, wantsChat, nagPushFailed, nagEmailFailed, nagDeliveredUpdate, nagHuddleAlarmBody } from "../_shared/deadline-reminders.ts";
 
 // Notification types that become the phone's full-screen alarm (channel `calendar_events`).
 // `deadline_reminder` (the hourly "time card" nag) is an alarm too, but NOT a task_start_* type, so the
@@ -984,6 +984,18 @@ serve(async (req) => {
           const isNag = primaryType === DEADLINE_REMINDER_TYPE;
           const nagFailures: string[] = [];
           if (isNag && nagPushFailed(pushError, pushData)) nagFailures.push('push_failed');
+          // The owner's phone runs the HUDDLE app, which a journey-native push never reaches: send the same
+          // full-screen alarm (with Done) there too. Only for deadline nags; every other type is unchanged.
+          if (isNag && singleRow) {
+            try {
+              const { data: hData, error: hError } = await supabaseClient.functions.invoke('send-push-notification', {
+                body: nagHuddleAlarmBody({ userId, title, body, taskId: singleRow.task_id ?? null, notificationId: singleRow.id }),
+              });
+              if (nagPushFailed(hError, hData)) nagFailures.push('huddle_push_failed');
+            } catch {
+              nagFailures.push('huddle_push_failed');
+            }
+          }
           if (isNag && singleRow && wantsChat(primaryType, singleRow.metadata)) {
             try {
               const { error: chatError } = await supabaseClient.functions.invoke('send-chat-message', {
