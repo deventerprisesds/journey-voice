@@ -884,3 +884,6 @@ reintroduce an employment start date into the JOB design — owner ruled it moot
 
 ## Hardening 2026-11-20 — an enum column is a contract every writer must meet
 A free-form model field (priority) was written straight into a Postgres enum. Five writers did this independently (execute-tool x4, twilio, MCP, two web screens). Guard: normalise at the producer AND at each writer through the one shared helper; test P-1..P-10 pins it.
+
+## Hardening 2026-11-28 — a model that "returns JSON" must be schema-enforced
+ai-task-parser described its JSON shape in prose only; on replay gpt-4o-mini put "BACKLOG" in priority 26/30 times. Any LLM call whose output is written to an enum column uses `response_format` json_schema strict with enums taken from the DB enum (`_shared/task-parse-schema.ts`), plus the writer-side normaliser as a second line. Repeating one literal in many prompt examples pulls it into neighbouring fields.

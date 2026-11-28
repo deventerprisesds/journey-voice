@@ -6,6 +6,13 @@ the technical findings) and `.claude/accuracy-log.md` (wrong-first-answers).
 
 ---
 
+## ACT:task-parser-strict — stop the AI task reader writing status words into priority (2026-11-28)
+- **Owner:** "This doesn't solve the fact it is suddenly tagging with bad priority values etc... what changed?" then "Go on your recommendations as long as reversible".
+- **Measured 2026-11-26:** 15 replays of the 2026-11-19 failing input ("Create a Trinnex RAG similar to the Azure agent RAG" / "Build a Trinnex chatbot widget in Huddle") through the live ai-task-parser (pg_net, no userId, nothing written): function logs show priority "BACKLOG" normalised on 26 of 30 tasks. Cause: the prompt only DESCRIBED the JSON shape (no response_format), and repeated `status: "BACKLOG"` in ~15 examples. Whether it is new could not be proven: logs keep ~1 day, error_log never recorded it, repo history starts 2026-10-15; the prompt near priority/status is unchanged since then.
+- **Fix (branch claude_task-parser-strict):** `_shared/task-parse-schema.ts` -> OpenAI `response_format` json_schema strict (priority/category/status/intent enums from the DB enums); trimmed the BACKLOG example repetition; explicit "no urgency words -> MEDIUM". Tests S-1..S-6; S-1 and S-6 mutation-FIRED; npm test 849/849. Reversible: revert the one commit.
+- [ ] Merge -> deploy -> re-run the same 30-task replay, expect 0 normalisations.
+- [ ] Owner confirms Iris's new tasks carry sensible priorities. NOT owner-confirmed.
+
 ## ACT:task-priority-enum — Iris could not create tasks: parser put "BACKLOG" in priority (2026-11-19)
 - **Owner:** "why is iris failing at creating tasks? check the chat thread"
 - **Ground truth (execute-tool logs 2026-11-19 18:21:10Z / 18:22:23Z):** two `parse_and_create_tasks` calls ("Create a Trinnex RAG similar to the Azure agent RAG", "Build a Trinnex chatbot widget in Huddle") -> each task failed `22P02 invalid input value for enum task_priority: "BACKLOG"`. ai-task-parser (gpt-4o-mini) returned a STATUS word as priority; execute-tool wrote `(task.priority||'MEDIUM').toUpperCase()` unchecked.
